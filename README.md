@@ -537,6 +537,10 @@ npm run dev
 npm run deploy
 ```
 
+Cloudflare Workers Builds deploys every new commit pushed to the configured
+production branch. For this D1/R2 migration, that branch is
+`feature/d1-r2-storage`.
+
 ### Tests
 
 ```bash
