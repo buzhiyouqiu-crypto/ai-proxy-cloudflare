@@ -33,7 +33,7 @@
     {
       "binding": "DB",
       "database_name": "keyloom-db",
-      "database_id": "REPLACE_WITH_YOUR_D1_DATABASE_ID",
+      "database_id": "2724cd7c-166a-402a-a553-1e27f74a8422",
       "migrations_dir": "migrations"
     }
   ],
