@@ -31,6 +31,7 @@ import { getGroupVaultPassword, groupVaultKvKey, LEGACY_VAULT_KV_KEY } from '../
 import { recordError, recordQuotaObservation, recordUsage } from '../lib/usage-db';
 import { decryptAiConfig } from '../lib/ai-enc';
 import { persistVaultForAccess } from '../lib/vaults';
+import { getStorage } from '../lib/storage';
 import { computeNextMistralReset, currentQuotaPeriodStart } from '../lib/quota';
 import {
 	collectOpenAiCompletion,
@@ -67,8 +68,9 @@ async function resolveVaultAccess(
 	ctx: UserContext,
 	bearerToken: string,
 ): Promise<VaultAccess | null> {
-	if (ctx.groupId && ctx.group) {
-		const encryptedVault = await env.KV_AI_PROXY.get(groupVaultKvKey(ctx.groupId, ctx.group));
+  const storage = getStorage(env);
+  if (ctx.groupId && ctx.group) {
+    const encryptedVault = await storage.get(groupVaultKvKey(ctx.groupId, ctx.group));
 		if (!encryptedVault) return null;
 		return {
 			encryptedVault,
@@ -79,7 +81,7 @@ async function resolveVaultAccess(
 	}
 
 	if (ctx.isLegacy) {
-		const encryptedVault = await env.KV_AI_PROXY.get(LEGACY_VAULT_KV_KEY);
+    const encryptedVault = await storage.get(LEGACY_VAULT_KV_KEY);
 		if (!encryptedVault) return null;
 		return {
 			encryptedVault,
@@ -89,7 +91,7 @@ async function resolveVaultAccess(
 		};
 	}
 
-	const encryptedVault = await env.KV_AI_PROXY.get(`vault:${ctx.vaultId}`);
+  const encryptedVault = await storage.get(`vault:${ctx.vaultId}`);
 	if (!encryptedVault) return null;
 	return {
 		encryptedVault,
@@ -144,7 +146,7 @@ async function flagKeyQuotaExhausted(
 
 universal.use('*', async (c, next) => {
 	const token = extractBearerToken(c.req.header('Authorization') || null);
-	const ctx = await getUserContext(c.env.KV_AI_PROXY, token, c.env.AI_JSON_CRYPTOKEN);
+	const ctx = await getUserContext(getStorage(c.env), token, c.env.AI_JSON_CRYPTOKEN);
 	if (!ctx) {
 		const { body, status } = openAiError('Invalid API key', 'invalid_request_error', 401);
 		return c.json(body, { status: status as 401 });

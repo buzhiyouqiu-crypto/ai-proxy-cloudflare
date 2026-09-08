@@ -24,6 +24,7 @@ import { env, SELF } from 'cloudflare:test';
 
 import { encryptVault } from '../src/lib/ai-enc';
 import { deriveGroupSecret } from '../src/lib/groups';
+import { getStorage } from '../src/lib/storage';
 import { openAiToGatewayInput } from '../src/lib/universal';
 import type { AiConfig, GroupRecord } from '../src/types/ai-config';
 
@@ -65,14 +66,15 @@ function authed(token: string, init: RequestInit = {}): RequestInit {
 }
 
 beforeAll(async () => {
-  await env.KV_AI_PROXY.put('migration:ran', 'true');
-  await env.KV_AI_PROXY.put('migration:groups', 'true');
+  const storage = getStorage(env);
+  await storage.put('migration:ran', 'true');
+  await storage.put('migration:groups', 'true');
 
   const group: GroupRecord = { name: 'Universal', createdAt: 1, createdBy: 'test' };
-  await env.KV_AI_PROXY.put('groups', JSON.stringify({ uni: group }));
+  await storage.put('groups', JSON.stringify({ uni: group }));
   const secret = await deriveGroupSecret(MASTER, 'uni');
-  await env.KV_AI_PROXY.put('vault:group:uni', await encryptVault(JSON.stringify(groupVault), secret));
-  await env.KV_AI_PROXY.put(
+  await storage.put('vault:group:uni', await encryptVault(JSON.stringify(groupVault), secret));
+  await storage.put(
     'users',
     JSON.stringify({ carol: { key: USER_KEY, owner: 'carol', role: 'user', groupId: 'uni' } }),
   );

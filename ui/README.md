@@ -154,7 +154,7 @@ The main dashboard adapts based on user role:
 ### Vault Isolation
 
 - Each user's vault is encrypted with their own password
-- Vaults are stored separately in Cloudflare KV
+- Vaults are stored separately in Cloudflare R2
 - Access is restricted to the vault owner only
 
 ### Role-Based Access Control

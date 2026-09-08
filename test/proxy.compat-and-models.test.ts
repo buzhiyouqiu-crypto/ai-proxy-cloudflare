@@ -23,6 +23,7 @@ import { env, SELF, reset } from 'cloudflare:test';
 
 import aiConfig from '../ai.json';
 import users from '../users.json';
+import { getStorage } from '../src/lib/storage';
 
 const AI_JSON_ENC_KV_KEY = 'vault:ai.json.enc';
 
@@ -154,13 +155,13 @@ describe('ai-proxy worker compatibility and model routing', () => {
       throw new Error('Missing AI_JSON_CRYPTOKEN in test environment');
     }
 
-    // Seed user validation dataset in KV
-    await env.KV_AI_PROXY.put('users', JSON.stringify(usersMap));
+    // Seed user validation dataset in D1
+    await getStorage(env).put('users', JSON.stringify(usersMap));
 
-    // Seed encrypted ai.json.enc into KV to avoid network dependency
-    // This simulates the production setup where ai.json is encrypted in KV
+    // Seed encrypted ai.json.enc into R2 to avoid network dependency
+    // This simulates the production setup where ai.json is encrypted in R2
     const encrypted = await encryptOpenSslAes256CbcBase64(JSON.stringify(aiConfig), cryptoToken);
-    await env.KV_AI_PROXY.put(AI_JSON_ENC_KV_KEY, encrypted, { expirationTtl: 3600 });
+    await getStorage(env).put(AI_JSON_ENC_KV_KEY, encrypted);
   });
 
   /**

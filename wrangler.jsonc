@@ -29,10 +29,18 @@
     "DEBUG": "false",
     "FUFUNI_MERCHANT_URL": ""
   },
-  "kv_namespaces": [
+  "d1_databases": [
     {
-      "binding": "KV_AI_PROXY",
-      "id": "0f6936bc4d9b4d5fa1cc85acd757e354"
+      "binding": "DB",
+      "database_name": "keyloom-db",
+      "database_id": "REPLACE_WITH_YOUR_D1_DATABASE_ID",
+      "migrations_dir": "migrations"
+    }
+  ],
+  "r2_buckets": [
+    {
+      "binding": "VAULT_BUCKET",
+      "bucket_name": "keyloom-vaults"
     }
   ],
   "durable_objects": {

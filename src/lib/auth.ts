@@ -20,6 +20,7 @@
 
 import { GroupRecord, UserRecord, UserRole } from '../types/ai-config';
 import { loadGroups } from './groups';
+import type { AppStorage } from './storage';
 
 /**
  * User context returned by getUserContext for management endpoints.
@@ -33,7 +34,7 @@ export interface UserContext {
   groupId?: string;
   /** Human-readable name of the user's group. */
   groupName?: string;
-  /** Resolved group record (avoids a second KV read downstream). */
+  /** Resolved group record (avoids a second D1 read downstream). */
   group?: GroupRecord;
 }
 
@@ -43,14 +44,14 @@ export function isAdminRole(role: UserRole): boolean {
 }
 
 /**
- * Load user keys from KV or fallback to embedded data.
+ * Load user keys from D1/R2 storage or fallback to an empty record.
  */
-export async function loadUserKeys(kv: KVNamespace): Promise<Record<string, UserRecord>> {
+export async function loadUserKeys(storage: AppStorage): Promise<Record<string, UserRecord>> {
   try {
-    const stored = await kv.get('users', 'json');
+    const stored = await storage.get('users', 'json');
     if (stored) return stored as Record<string, UserRecord>;
   } catch (err) {
-    console.error('Failed to load users from KV:', err);
+    console.error('Failed to load users from D1:', err);
   }
   // Fallback: return empty record
   return {};
@@ -61,22 +62,22 @@ export async function loadUserKeys(kv: KVNamespace): Promise<Record<string, User
  * Does NOT affect the proxy's `validateUserKey`.
  */
 export async function getUserContext(
-  kv: KVNamespace,
+  storage: AppStorage,
   bearerToken: string | null,
   cryptoToken: string
 ): Promise<UserContext | null> {
   if (!bearerToken) return null;
 
-  const users = await loadUserKeys(kv);
+  const users = await loadUserKeys(storage);
 
-  // 1. Check against 'users' KV first (multi-user mode)
+  // 1. Check against the 'users' D1 record first (multi-user mode)
   for (const [username, record] of Object.entries(users)) {
     if (record.key === bearerToken) {
       const role: UserRole = (record.role as UserRole) || 'user';
 
       // Multi-group mode: groupId takes precedence over per-user vaultId
       if (record.groupId) {
-        const groups = await loadGroups(kv);
+        const groups = await loadGroups(storage);
         const group = groups[record.groupId];
         return {
           username,
@@ -116,10 +117,10 @@ export async function getUserContext(
  * Returns the username if valid, null otherwise.
  */
 export async function validateUserKey(
-  kv: KVNamespace,
+  storage: AppStorage,
   bearerToken: string,
 ): Promise<string | null> {
-  const users = await loadUserKeys(kv);
+  const users = await loadUserKeys(storage);
 
   for (const [username, record] of Object.entries(users)) {
     if (record.key === bearerToken) {

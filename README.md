@@ -4,8 +4,8 @@ Modern proxy to route API requests through the **Cloudflare AI Gateway** with **
 
 ## 🚀 Features
 
-- ✅ **On-the-fly decryption** of `ai.json.enc` stored in KV
-- ✅ **User validation** using keys stored in KV (`users` key)
+- ✅ **On-the-fly decryption** of `ai.json.enc` stored in Cloudflare R2
+- ✅ **User validation** using metadata stored in Cloudflare D1
 - ✅ **Multi-provider routing** (Groq, SambaNova, Anthropic, OpenAI, Gemini, Mistral, OpenRouter, Morph)
 - ✅ **OpenAI-compatible `:provider/v1/models` endpoint** per provider
 - ✅ **Vault UI model discovery** from provider APIs, with chat/embedding classification
@@ -85,20 +85,46 @@ The `src/config/ai.json.enc` file must be:
 }
 ```
 
-### 3. Upload to Cloudflare KV:
+### 3. Create the D1 database and R2 bucket
+
+The worker uses D1 for small metadata (`users`, `groups`, migration flags) and
+R2 for encrypted vault objects (`vault:ai.json.enc`, per-user/group vaults and
+`vault:byok`). Usage aggregation remains in the existing Durable Object SQLite
+database.
+
+Create the resources once:
+
 ```bash
-wrangler kv:key put vault:ai.json.enc --path=ai.json.enc --namespace-id=YOUR_KV_NAMESPACE_ID
+npx wrangler d1 create keyloom-db
+npx wrangler r2 bucket create keyloom-vaults
 ```
 
-### 4. Initialize KV with users
-
-Load valid users into KV (`KV_AI_PROXY`), key `users`:
+Copy the `database_id` returned by the first command into `wrangler.jsonc`,
+replacing `REPLACE_WITH_YOUR_D1_DATABASE_ID`, then apply the schema:
 
 ```bash
-wrangler kv:key put users '{"ronan":{"key":"AGE-SECRET-KEY-..."},"audrey":{"key":"AGE-SECRET-KEY-..."},...}' --namespace-id=0f6936bc4d9b4d5fa1cc85acd757e354
+npx wrangler d1 migrations apply keyloom-db --remote
 ```
 
-For development, keys are read from `users.json` if KV is empty.
+For local development use `--local` instead.
+
+### 4. Upload the encrypted vault to R2:
+```bash
+npx wrangler r2 object put keyloom-vaults/keyloom/vault:ai.json.enc --file=ai.json.enc
+```
+
+### 5. Initialize D1 with users
+
+The first request automatically creates the legacy admin record when the legacy
+vault exists. To initialize users manually, insert the JSON map into D1:
+
+```bash
+npx wrangler d1 execute keyloom-db --remote --command \
+  "INSERT INTO app_kv (key, value, created_at, updated_at) VALUES ('users', '{\"admin\":{\"key\":\"YOUR_TOKEN\",\"owner\":\"admin\",\"role\":\"superadmin\"}}', strftime('%s','now') * 1000, strftime('%s','now') * 1000)"
+```
+
+Do not commit real API keys or tokens to the repository. `wrangler.jsonc` must
+also contain the actual D1 database ID before a remote deploy can succeed.
 
 ---
 
@@ -267,7 +293,7 @@ Returns the raw encrypted vault. Unauthenticated - anyone can download the encry
 
 ### PUT /ai.json.enc
 
-Updates the encrypted vault in KV. Requires `Authorization: Bearer` header matching `AI_JSON_CRYPTOKEN`.
+Updates the encrypted vault in R2. Requires `Authorization: Bearer` header matching `AI_JSON_CRYPTOKEN`.
 
 Example:
 ```bash
@@ -384,7 +410,7 @@ Response:
 
 - **Legacy mode**: Single vault at `vault:ai.json.enc`
 - **Multi-user mode**: Individual vaults at `vault:{vaultId}`
-- **Automatic detection**: The system detects the mode based on KV contents
+- **Automatic detection**: The system detects the mode based on D1 metadata
 
 #### Migration Process
 
@@ -398,11 +424,16 @@ Migration logs:
 Migration successful: created admin user with legacy vault.
 ```
 
+> The D1/R2 switch does not copy data from an old KV namespace automatically.
+> If an earlier deployment already contains users or vaults in KV, export and
+> import that data before removing the old KV binding. A fresh deployment can
+> follow the setup steps above directly.
+
 #### Vault Isolation
 
 Each user's vault is:
 - ✅ Encrypted with their own password
-- ✅ Stored separately in KV
+- ✅ Stored separately in R2
 - ✅ Accessible only with their token
 - ✅ Completely isolated from other users
 
@@ -636,4 +667,3 @@ npm test
 AGPL-3.0-or-later
 
 Copyright © 2024-2026 Ronan LE MEILLAT
-

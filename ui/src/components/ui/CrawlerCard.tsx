@@ -323,7 +323,7 @@ export const CrawlerCard: React.FC<CrawlerCardProps> = ({
                      const keys = crawler.keys.map(k => k.key).join(',');
                      navigator.clipboard.writeText(keys).then(() => {
                        // Show feedback by temporarily changing the icon
-                       const button = document.activeElement;
+                       const button = document.activeElement as HTMLElement | null;
                        if (button) {
                          button.style.opacity = '0.5';
                          setTimeout(() => {

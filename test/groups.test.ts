@@ -23,6 +23,7 @@ import { env, SELF } from 'cloudflare:test';
 
 import { decryptAiConfig, encryptVault } from '../src/lib/ai-enc';
 import { deriveGroupSecret } from '../src/lib/groups';
+import { getStorage } from '../src/lib/storage';
 import type { AiConfig } from '../src/types/ai-config';
 
 const BASE = 'https://example.com';
@@ -64,15 +65,16 @@ function authed(token: string, init: RequestInit = {}): RequestInit {
 
 beforeAll(async () => {
   // Neutralize the lazy migration: this file tests explicit group management.
-  await env.KV_AI_PROXY.put('migration:ran', 'true');
-  await env.KV_AI_PROXY.put('migration:groups', 'true');
+  const storage = getStorage(env);
+  await storage.put('migration:ran', 'true');
+  await storage.put('migration:groups', 'true');
   // A superadmin without any group
-  await env.KV_AI_PROXY.put(
+  await storage.put(
     'users',
     JSON.stringify({ boss: { key: SUPERADMIN_KEY, owner: 'boss', role: 'superadmin' } }),
   );
   // The BYOK template used to seed new group vaults
-  await env.KV_AI_PROXY.put('vault:byok', JSON.stringify(byokTemplate));
+  await storage.put('vault:byok', JSON.stringify(byokTemplate));
 });
 
 describe('group management', () => {
@@ -96,7 +98,7 @@ describe('group management', () => {
     expect(body.seededFromByok).toBe(true);
 
     // The vault must decrypt with the group-derived secret
-    const blob = await env.KV_AI_PROXY.get('vault:group:acme');
+    const blob = await getStorage(env).get('vault:group:acme');
     expect(blob).toBeTruthy();
     const secret = await deriveGroupSecret(MASTER, 'acme');
     const vault = await decryptAiConfig(blob!, secret);
@@ -196,7 +198,7 @@ describe('group management', () => {
     expect(putRes.status).toBe(200);
 
     // Stored blob is encrypted with the derived group secret
-    const stored = await env.KV_AI_PROXY.get('vault:group:acme');
+    const stored = await getStorage(env).get('vault:group:acme');
     const secret = await deriveGroupSecret(MASTER, 'acme');
     const storedVault = await decryptAiConfig(stored!, secret);
     expect(storedVault.providers.openai.keys[0].key).toBe('sk-real-group-key');
@@ -269,6 +271,6 @@ describe('group management', () => {
     expect(forced.status).toBe(200);
     const body = (await forced.json()) as { deletedUsers: string[] };
     expect(body.deletedUsers.sort()).toEqual(['alice', 'bob']);
-    expect(await env.KV_AI_PROXY.get('vault:group:acme')).toBeNull();
+    expect(await getStorage(env).get('vault:group:acme')).toBeNull();
   });
 });

@@ -18,7 +18,7 @@
 /**
  * @file Login screen component.
  * The user enters the Bearer token that is both the HTTP auth token and the
- * AES-256-CBC decryption password for the encrypted vault stored in KV.
+ * AES-256-CBC decryption password for the encrypted vault stored in R2.
  */
 
 import React, { useState } from 'react';
@@ -118,4 +118,3 @@ export const LoginScreen: React.FC = () => {
     </div>
   );
 };
-

@@ -134,7 +134,7 @@ export interface QuotaObservationStat {
 // ─── Internal record shapes ───────────────────────────────────────────────────
 
 /**
- * Aggregated usage record stored in KV.
+ * Aggregated usage record stored in Durable Object SQLite.
  * One record per hour bucket, updated atomically.
  */
 interface AggregatedUsageRecord {
@@ -149,7 +149,7 @@ interface AggregatedUsageRecord {
 }
 
 /**
- * Aggregated error record stored in KV.
+ * Aggregated error record stored in Durable Object SQLite.
  * One record per hour bucket, updated atomically.
  */
 interface AggregatedErrorRecord {

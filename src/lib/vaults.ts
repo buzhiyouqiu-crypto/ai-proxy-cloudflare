@@ -27,6 +27,7 @@ import {
 } from './groups';
 import type { AiConfig, GroupRecord } from '../types/ai-config';
 import type { UserContext } from './auth';
+import { getStorage } from './storage';
 
 /**
  * In-memory cache of decrypted AI configurations.
@@ -59,9 +60,9 @@ export async function loadAiConfig(
   }
 
   const kvKey = vaultId === 'legacy' ? LEGACY_VAULT_KV_KEY : `vault:${vaultId}`;
-  const encryptedPayload = await env.KV_AI_PROXY.get(kvKey);
+  const encryptedPayload = await getStorage(env).get(kvKey);
   if (!encryptedPayload) {
-    throw new Error(`Vault "${vaultId}" not found in KV`);
+    throw new Error(`Vault "${vaultId}" not found in R2`);
   }
 
   const decrypted = await decryptAiConfig(encryptedPayload, password);
@@ -82,9 +83,9 @@ export async function loadGroupConfig(
     return cachedConfigs.get(cacheKey)!;
   }
 
-  const encryptedPayload = await env.KV_AI_PROXY.get(groupVaultKvKey(groupId, group));
+  const encryptedPayload = await getStorage(env).get(groupVaultKvKey(groupId, group));
   if (!encryptedPayload) {
-    throw new Error(`Vault for group "${groupId}" not found in KV`);
+    throw new Error(`Vault for group "${groupId}" not found in R2`);
   }
 
   const password = await getGroupVaultPassword(env.AI_JSON_CRYPTOKEN, groupId, group);
@@ -105,7 +106,7 @@ export async function saveGroupConfig(
 ): Promise<void> {
   const password = await getGroupVaultPassword(env.AI_JSON_CRYPTOKEN, groupId, group);
   const encrypted = await encryptVault(JSON.stringify(config), password);
-  await env.KV_AI_PROXY.put(groupVaultKvKey(groupId, group), encrypted);
+  await getStorage(env).put(groupVaultKvKey(groupId, group), encrypted);
   invalidateVaultCache(`group:${groupId}`);
   if (group.legacy) {
     invalidateVaultCache('legacy');
@@ -137,12 +138,12 @@ export async function persistVaultForAccess(
 
   if (ctx.isLegacy) {
     const encrypted = await encryptVault(JSON.stringify(config), env.AI_JSON_CRYPTOKEN);
-    await env.KV_AI_PROXY.put(LEGACY_VAULT_KV_KEY, encrypted);
+    await getStorage(env).put(LEGACY_VAULT_KV_KEY, encrypted);
     invalidateVaultCache('legacy');
     return;
   }
 
   const encrypted = await encryptVault(JSON.stringify(config), token);
-  await env.KV_AI_PROXY.put(`vault:${ctx.vaultId}`, encrypted);
+  await getStorage(env).put(`vault:${ctx.vaultId}`, encrypted);
   invalidateVaultCache(ctx.vaultId);
 }

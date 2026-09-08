@@ -7,8 +7,8 @@
   "license": "AGPL-3.0-or-later",
   "scripts": {
     "dev": "wrangler dev --port 8787 --inspector-port 9230",
-    "deploy": "wrangler deploy",
-    "build": "wrangler deploy --dry-run",
+    "deploy": "npm install --prefix ui --no-audit --no-fund && npm run build --prefix ui && npx wrangler deploy",
+    "build": "npm install --prefix ui --no-audit --no-fund && npm run build --prefix ui && npx wrangler deploy --dry-run",
     "test": "vitest",
     "test:e2e": "vitest --run test/keypool.universal.e2e.test.ts",
     "typegen": "wrangler types"

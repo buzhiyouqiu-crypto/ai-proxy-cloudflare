@@ -32,6 +32,7 @@ import {
   slugifyGroupId,
 } from '../lib/groups';
 import { invalidateVaultCache, saveGroupConfig } from '../lib/vaults';
+import { getStorage } from '../lib/storage';
 import type { AiConfig, GroupRecord, UserRecord, UserRole } from '../types/ai-config';
 
 type HonoEnv = { Bindings: Env; Variables: { userContext: UserContext } };
@@ -54,7 +55,7 @@ function maskKey(key: string | undefined): string | null {
  */
 groups.use('*', async (c, next) => {
   const token = extractBearerToken(c.req.header('Authorization') || null);
-  const ctx = await getUserContext(c.env.KV_AI_PROXY, token, c.env.AI_JSON_CRYPTOKEN);
+  const ctx = await getUserContext(getStorage(c.env), token, c.env.AI_JSON_CRYPTOKEN);
   if (!ctx) {
     return c.json({ error: 'Unauthorized' }, { status: 401 });
   }
@@ -76,8 +77,9 @@ function canManageGroup(ctx: UserContext, groupId: string): boolean {
  */
 groups.get('/', async (c) => {
   const ctx = c.get('userContext');
-  const allGroups = await loadGroups(c.env.KV_AI_PROXY);
-  const users = await loadUserKeys(c.env.KV_AI_PROXY);
+  const storage = getStorage(c.env);
+  const allGroups = await loadGroups(storage);
+  const users = await loadUserKeys(storage);
 
   const memberCounts: Record<string, number> = {};
   for (const record of Object.values(users)) {
@@ -133,12 +135,13 @@ groups.post('/', async (c) => {
     );
   }
 
-  const allGroups = await loadGroups(c.env.KV_AI_PROXY);
+  const storage = getStorage(c.env);
+  const allGroups = await loadGroups(storage);
   if (allGroups[groupId]) {
     return c.json({ error: `Group '${groupId}' already exists` }, { status: 409 });
   }
 
-  const byokTemplate = (await c.env.KV_AI_PROXY.get(BYOK_KV_KEY, 'json')) as AiConfig | null;
+  const byokTemplate = (await storage.get(BYOK_KV_KEY, 'json')) as AiConfig | null;
   const vault = createGroupVaultTemplate(byokTemplate);
 
   const group: GroupRecord = {
@@ -150,7 +153,7 @@ groups.post('/', async (c) => {
   try {
     await saveGroupConfig(c.env, groupId, group, vault);
     allGroups[groupId] = group;
-    await saveGroups(c.env.KV_AI_PROXY, allGroups);
+    await saveGroups(storage, allGroups);
   } catch (err) {
     console.error('Failed to create group:', err);
     return c.json(
@@ -181,7 +184,8 @@ groups.delete('/:groupId', async (c) => {
   }
 
   const groupId = c.req.param('groupId');
-  const allGroups = await loadGroups(c.env.KV_AI_PROXY);
+  const storage = getStorage(c.env);
+  const allGroups = await loadGroups(storage);
   const group = allGroups[groupId];
   if (!group) {
     return c.json({ error: `Group '${groupId}' not found` }, { status: 404 });
@@ -190,7 +194,7 @@ groups.delete('/:groupId', async (c) => {
     return c.json({ error: 'The legacy group cannot be deleted' }, { status: 400 });
   }
 
-  const users = await loadUserKeys(c.env.KV_AI_PROXY);
+  const users = await loadUserKeys(storage);
   const members = Object.entries(users).filter(([, record]) => record.groupId === groupId);
   const force = c.req.query('force') === 'true';
 
@@ -207,13 +211,13 @@ groups.delete('/:groupId', async (c) => {
   for (const [username] of members) {
     delete users[username];
   }
-  await c.env.KV_AI_PROXY.put('users', JSON.stringify(users));
+  await storage.put('users', JSON.stringify(users));
 
-  await c.env.KV_AI_PROXY.delete(groupVaultKvKey(groupId, group));
+  await storage.delete(groupVaultKvKey(groupId, group));
   invalidateVaultCache(`group:${groupId}`);
 
   delete allGroups[groupId];
-  await saveGroups(c.env.KV_AI_PROXY, allGroups);
+  await saveGroups(storage, allGroups);
 
   return c.json({ ok: true, deletedUsers: members.map(([username]) => username) });
 });
@@ -230,12 +234,13 @@ groups.get('/:groupId/users', async (c) => {
     return c.json({ error: 'Forbidden' }, { status: 403 });
   }
 
-  const allGroups = await loadGroups(c.env.KV_AI_PROXY);
+  const storage = getStorage(c.env);
+  const allGroups = await loadGroups(storage);
   if (!allGroups[groupId]) {
     return c.json({ error: `Group '${groupId}' not found` }, { status: 404 });
   }
 
-  const users = await loadUserKeys(c.env.KV_AI_PROXY);
+  const users = await loadUserKeys(storage);
   const members = Object.entries(users)
     .filter(([, record]) => record.groupId === groupId)
     .map(([username, record]) => ({
@@ -262,7 +267,8 @@ groups.post('/:groupId/users', async (c) => {
     return c.json({ error: 'Forbidden' }, { status: 403 });
   }
 
-  const allGroups = await loadGroups(c.env.KV_AI_PROXY);
+  const storage = getStorage(c.env);
+  const allGroups = await loadGroups(storage);
   if (!allGroups[groupId]) {
     return c.json({ error: `Group '${groupId}' not found` }, { status: 404 });
   }
@@ -287,7 +293,7 @@ groups.post('/:groupId/users', async (c) => {
     return c.json({ error: 'Only a superadmin can grant the superadmin role' }, { status: 403 });
   }
 
-  const users = await loadUserKeys(c.env.KV_AI_PROXY);
+  const users = await loadUserKeys(storage);
   if (users[username]) {
     return c.json({ error: `User '${username}' already exists` }, { status: 409 });
   }
@@ -304,7 +310,7 @@ groups.post('/:groupId/users', async (c) => {
     groupId,
   };
   users[username] = record;
-  await c.env.KV_AI_PROXY.put('users', JSON.stringify(users));
+  await storage.put('users', JSON.stringify(users));
 
   // The key is returned once; only the hint is exposed afterwards.
   return c.json({ ok: true, username, groupId, role, key });
@@ -323,7 +329,8 @@ groups.put('/:groupId/users/:username', async (c) => {
     return c.json({ error: 'Forbidden' }, { status: 403 });
   }
 
-  const users = await loadUserKeys(c.env.KV_AI_PROXY);
+  const storage = getStorage(c.env);
+  const users = await loadUserKeys(storage);
   const record = users[username];
   if (!record || record.groupId !== groupId) {
     return c.json({ error: `User '${username}' not found in group '${groupId}'` }, { status: 404 });
@@ -370,7 +377,7 @@ groups.put('/:groupId/users/:username', async (c) => {
   }
 
   users[username] = record;
-  await c.env.KV_AI_PROXY.put('users', JSON.stringify(users));
+  await storage.put('users', JSON.stringify(users));
 
   return c.json({
     ok: true,
@@ -398,7 +405,8 @@ groups.delete('/:groupId/users/:username', async (c) => {
     return c.json({ error: 'You cannot delete your own account' }, { status: 400 });
   }
 
-  const users = await loadUserKeys(c.env.KV_AI_PROXY);
+  const storage = getStorage(c.env);
+  const users = await loadUserKeys(storage);
   const record = users[username];
   if (!record || record.groupId !== groupId) {
     return c.json({ error: `User '${username}' not found in group '${groupId}'` }, { status: 404 });
@@ -408,7 +416,7 @@ groups.delete('/:groupId/users/:username', async (c) => {
   }
 
   delete users[username];
-  await c.env.KV_AI_PROXY.put('users', JSON.stringify(users));
+  await storage.put('users', JSON.stringify(users));
 
   return c.json({ ok: true, deleted: username });
 });

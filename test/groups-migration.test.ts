@@ -22,6 +22,7 @@ import { beforeAll, describe, expect, it } from 'vitest';
 import { env, SELF } from 'cloudflare:test';
 
 import { encryptVault } from '../src/lib/ai-enc';
+import { getStorage } from '../src/lib/storage';
 import type { AiConfig, GroupRecord, UserRecord } from '../src/types/ai-config';
 
 const BASE = 'https://example.com';
@@ -44,8 +45,9 @@ const legacyConfig: AiConfig = {
 
 beforeAll(async () => {
   // Simulate a pre-migration deployment: legacy vault + v1-era users.
-  await env.KV_AI_PROXY.put('vault:ai.json.enc', await encryptVault(JSON.stringify(legacyConfig), MASTER));
-  await env.KV_AI_PROXY.put(
+  const storage = getStorage(env);
+  await storage.put('vault:ai.json.enc', await encryptVault(JSON.stringify(legacyConfig), MASTER));
+  await storage.put(
     'users',
     JSON.stringify({
       admin: { key: MASTER, owner: 'admin', vaultId: 'legacy', role: 'admin' },
@@ -53,22 +55,22 @@ beforeAll(async () => {
       solo: { key: 'solo-key', owner: 'solo', vaultId: 'vault_solo', role: 'user' },
     }),
   );
-  await env.KV_AI_PROXY.put('migration:ran', 'true');
+  await storage.put('migration:ran', 'true');
   // The first request triggers the lazy v2 migration.
   await SELF.fetch(`${BASE}/`);
 });
 
 describe('multi-group migration', () => {
   it('creates the legacy-backed default group', async () => {
-    const groups = (await env.KV_AI_PROXY.get('groups', 'json')) as Record<string, GroupRecord>;
+  const groups = (await getStorage(env).get('groups', 'json')) as Record<string, GroupRecord>;
     expect(groups).toBeTruthy();
     expect(groups.default).toBeTruthy();
     expect(groups.default.legacy).toBe(true);
-    expect(await env.KV_AI_PROXY.get('migration:groups')).toBe('true');
+  expect(await getStorage(env).get('migration:groups')).toBe('true');
   });
 
   it('attaches legacy-vault users to the default group and promotes the master user', async () => {
-    const users = (await env.KV_AI_PROXY.get('users', 'json')) as Record<string, UserRecord>;
+  const users = (await getStorage(env).get('users', 'json')) as Record<string, UserRecord>;
     expect(users.admin.role).toBe('superadmin');
     expect(users.admin.groupId).toBe('default');
     expect(users.ronan.groupId).toBe('default');

@@ -19,17 +19,18 @@
 // Multi-group support: group records, derived vault secrets, vault template.
 
 import type { AiConfig, GroupRecord } from '../types/ai-config';
+import type { AppStorage } from './storage';
 
-/** KV key holding the Record<groupId, GroupRecord> map. */
+/** D1 metadata key holding the Record<groupId, GroupRecord> map. */
 export const GROUPS_KV_KEY = 'groups';
 
 /** Group ID of the migrated legacy vault. */
 export const DEFAULT_GROUP_ID = 'default';
 
-/** KV key of the historical single vault. */
+/** R2 object key of the historical single vault. */
 export const LEGACY_VAULT_KV_KEY = 'vault:ai.json.enc';
 
-/** KV key where the BYOK template (new-group vault seed) is stored. */
+/** R2 object key where the BYOK template (new-group vault seed) is stored. */
 export const BYOK_KV_KEY = 'vault:byok';
 
 /**
@@ -76,26 +77,26 @@ export async function getGroupVaultPassword(
   return deriveGroupSecret(masterSecret, groupId);
 }
 
-/** KV key storing a group's encrypted vault. */
+/** R2 object key storing a group's encrypted vault. */
 export function groupVaultKvKey(groupId: string, group: GroupRecord): string {
   if (group.legacy) return LEGACY_VAULT_KV_KEY;
   return `vault:group:${groupId}`;
 }
 
-/** Load the groups map from KV (empty map when unset). */
-export async function loadGroups(kv: KVNamespace): Promise<Record<string, GroupRecord>> {
+/** Load the groups map from D1 (empty map when unset). */
+export async function loadGroups(storage: AppStorage): Promise<Record<string, GroupRecord>> {
   try {
-    const stored = await kv.get(GROUPS_KV_KEY, 'json');
+    const stored = await storage.get(GROUPS_KV_KEY, 'json');
     if (stored) return stored as Record<string, GroupRecord>;
   } catch (err) {
-    console.error('Failed to load groups from KV:', err);
+    console.error('Failed to load groups from D1:', err);
   }
   return {};
 }
 
-/** Persist the groups map to KV. */
-export async function saveGroups(kv: KVNamespace, groups: Record<string, GroupRecord>): Promise<void> {
-  await kv.put(GROUPS_KV_KEY, JSON.stringify(groups));
+/** Persist the groups map to D1. */
+export async function saveGroups(storage: AppStorage, groups: Record<string, GroupRecord>): Promise<void> {
+  await storage.put(GROUPS_KV_KEY, JSON.stringify(groups));
 }
 
 /**
@@ -120,7 +121,7 @@ export function createGroupVaultTemplate(byokTemplate: AiConfig | null): AiConfi
 }
 
 /**
- * Validate a candidate group ID: short slug usable in KV keys and URLs.
+ * Validate a candidate group ID: short slug usable in R2 object keys and URLs.
  */
 export function isValidGroupId(groupId: string): boolean {
   return /^[a-z0-9][a-z0-9_-]{0,63}$/.test(groupId);
