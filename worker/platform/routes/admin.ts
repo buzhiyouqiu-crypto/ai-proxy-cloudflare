@@ -6,6 +6,7 @@ import { CredentialsDao } from "../../core/db/credentials-dao";
 import {
 	createCustomProvider,
 	parseCustomChannelMetadata,
+	testCustomExtractor,
 	type CustomChannelModel,
 } from "../../core/providers/custom-openai-compatible";
 import {
@@ -31,6 +32,8 @@ const admin = new Hono<AppEnv>();
 
 const CustomModelInput = z.object({
 	id: z.string().trim().min(1).max(200),
+	catalogModelId: z.string().trim().max(200).nullable().optional(),
+	catalogName: z.string().trim().max(200).nullable().optional(),
 	name: z.string().trim().max(200).nullable().optional(),
 	inputPrice: z.number().min(0).max(1_000_000),
 	outputPrice: z.number().min(0).max(1_000_000),
@@ -58,75 +61,48 @@ const DiscoverModelsInput = z.object({
 	outputPrice: z.number().min(0).max(1_000_000).default(0),
 });
 
-interface ResolvedCustomModel {
-	channelId: string;
-	channelName: string;
-	model: CustomChannelModel;
-	catalogModelId: string;
-	catalogName: string | null;
-}
-
-async function resolveCanonicalModel(
-	db: D1Database,
-	rawModelId: string,
-): Promise<{ modelId: string; name: string | null }> {
-	const normalized = rawModelId.trim().toLowerCase();
-	const exact = await db
-		.prepare(
-			`SELECT model_id, name FROM model_catalog
-			 WHERE lower(model_id) = ? AND is_active = 1
-			 ORDER BY CASE WHEN provider_id = 'openai' THEN 0 ELSE 1 END, input_price ASC
-			 LIMIT 1`,
-		)
-		.bind(normalized)
-		.first<{ model_id: string; name: string | null }>();
-	if (exact) return { modelId: exact.model_id, name: exact.name };
-
-	if (!normalized.includes("/")) {
-		const suffix = await db
-			.prepare(
-				`SELECT model_id, name FROM model_catalog
-				 WHERE lower(model_id) LIKE ? AND is_active = 1
-				 ORDER BY CASE WHEN provider_id = 'openai' THEN 0 ELSE 1 END, input_price ASC
-				 LIMIT 1`,
-			)
-			.bind(`%/${normalized}`)
-			.first<{ model_id: string; name: string | null }>();
-		if (suffix) return { modelId: suffix.model_id, name: suffix.name };
-	}
-
-	return { modelId: normalized, name: null };
-}
+const TestExtractorInput = z.object({
+	secret: z.string().trim().min(1).max(1000),
+	extractorCode: z.string().trim().min(1).max(20_000),
+});
 
 function customCatalogEntries(
-	models: ResolvedCustomModel[],
+	models: Array<{
+		channelId: string;
+		channelName: string;
+		model: CustomChannelModel;
+	}>,
 ): Omit<
 	import("../../core/db/schema").DbModelCatalog,
 	"refreshed_at" | "is_active"
 >[] {
-	return models.map(({ channelId, channelName, model, catalogModelId, catalogName }) => ({
-		id: `custom:${channelId}:${catalogModelId}`,
-		provider_id: "custom",
-		model_id: catalogModelId,
-		name: catalogName || model.name || catalogModelId,
-		model_type: model.modelType ?? "chat",
-		input_price: model.inputPrice,
-		output_price: model.outputPrice,
-		context_length: model.contextLength ?? null,
-		input_modalities: '["text"]',
-		output_modalities: '["text"]',
-		upstream_model_id: model.id,
-		metadata: JSON.stringify({
-			channelId,
-			channelName,
-			canonicalModelId: catalogModelId,
-			pricing: {
-				prompt: String(model.inputPrice / 1_000_000),
-				completion: String(model.outputPrice / 1_000_000),
-			},
-		}),
-		created: Date.now(),
-	}));
+	return models.map(({ channelId, channelName, model }) => {
+		const catalogModelId = model.catalogModelId?.trim() || model.id.trim();
+		return {
+			id: `custom:${channelId}:${catalogModelId}`,
+			provider_id: "custom",
+			model_id: catalogModelId,
+			name: model.catalogName || model.name || catalogModelId,
+			model_type: model.modelType ?? "chat",
+			input_price: model.inputPrice,
+			output_price: model.outputPrice,
+			context_length: model.contextLength ?? null,
+			input_modalities: '["text"]',
+			output_modalities: '["text"]',
+			upstream_model_id: model.id,
+			metadata: JSON.stringify({
+				channelId,
+				channelName,
+				canonicalModelId: catalogModelId,
+				upstreamModelId: model.id,
+				pricing: {
+					prompt: String(model.inputPrice / 1_000_000),
+					completion: String(model.outputPrice / 1_000_000),
+				},
+			}),
+			created: Date.now(),
+		};
+	});
 }
 
 async function rebuildCustomCatalog(db: D1Database): Promise<void> {
@@ -135,25 +111,26 @@ async function rebuildCustomCatalog(db: D1Database): Promise<void> {
 			"SELECT id, metadata FROM upstream_credentials WHERE provider_id = 'custom' AND is_enabled = 1",
 		)
 		.all<{ id: string; metadata: string | null }>();
-	const models: ResolvedCustomModel[] = [];
+	const models: Array<{
+		channelId: string;
+		channelName: string;
+		model: CustomChannelModel;
+	}> = [];
 	for (const row of rows.results ?? []) {
 		const channel = parseCustomChannelMetadata(row.metadata);
 		if (!channel) continue;
-		for (const model of channel?.models ?? []) {
-			const canonical = await resolveCanonicalModel(db, model.id);
+		for (const model of channel.models) {
 			models.push({
 				channelId: row.id,
 				channelName: channel.name,
 				model,
-				catalogModelId: canonical.modelId,
-				catalogName: canonical.name,
 			});
 		}
 	}
 
 	const catalog = new CatalogDao(db);
 	await catalog.deactivateProvider("custom");
-	const entries = customCatalogEntries([...models.values()]);
+	const entries = customCatalogEntries(models);
 	if (entries.length > 0) await catalog.upsert(entries);
 }
 
@@ -333,6 +310,147 @@ admin.get("/channels", async (c) => {
 	});
 });
 
+admin.get("/channels/catalog-models", async (c) => {
+	const rows = await new CatalogDao(c.env.DB).getAllActive();
+	const options = new Map<
+		string,
+		{
+			id: string;
+			name: string | null;
+			providerId: string;
+			modelType: "chat" | "embedding";
+		}
+	>();
+	for (const row of rows) {
+		const current = options.get(row.model_id);
+		if (!current || (row.provider_id === "openai" && current.providerId !== "openai")) {
+			options.set(row.model_id, {
+				id: row.model_id,
+				name: row.name,
+				providerId: row.provider_id,
+				modelType: row.model_type,
+			});
+		}
+	}
+	return c.json({
+		data: [...options.values()].sort((a, b) =>
+			(a.name || a.id).localeCompare(b.name || b.id),
+		),
+	});
+});
+
+function modelEndpointCandidates(baseUrl: string): string[] {
+	const normalized = baseUrl
+		.replace(/\/(chat\/completions|embeddings|models)$/i, "")
+		.replace(/\/+$/, "");
+	const root = normalized.replace(/\/v1$/i, "");
+	return [...new Set([`${normalized}/models`, `${root}/v1/models`, `${root}/models`])];
+}
+
+function discoveredModelRows(
+	raw: unknown,
+	inputPrice: number,
+	outputPrice: number,
+): CustomChannelModel[] {
+	if (!raw || typeof raw !== "object") return [];
+	const root = raw as Record<string, unknown>;
+	const nested = root.data;
+	const nestedObject =
+		nested && typeof nested === "object"
+			? (nested as Record<string, unknown>)
+			: null;
+	const resultObject =
+		root.result && typeof root.result === "object"
+			? (root.result as Record<string, unknown>)
+			: null;
+	const data: unknown[] = Array.isArray(nested)
+		? nested
+		: Array.isArray(nestedObject?.data)
+			? nestedObject.data
+			: Array.isArray(nestedObject?.models)
+				? nestedObject.models
+				: Array.isArray(root.models)
+					? root.models
+					: Array.isArray(root.result)
+						? root.result
+						: Array.isArray(resultObject?.models)
+							? resultObject.models
+							: [];
+
+	const parsePrice = (value: unknown, perToken: boolean, fallback: number) => {
+		const parsed = Number(value);
+		if (!Number.isFinite(parsed) || parsed < 0) return fallback;
+		return perToken ? parsed * 1_000_000 : parsed;
+	};
+
+	return data
+		.map((entry) => {
+			if (typeof entry === "string") {
+				return {
+					id: entry,
+					name: entry,
+					inputPrice,
+					outputPrice,
+					contextLength: null,
+					modelType: "chat" as const,
+				};
+			}
+			if (!entry || typeof entry !== "object") return null;
+			const item = entry as Record<string, unknown>;
+			const id =
+				typeof item.id === "string"
+					? item.id
+					: typeof item.model === "string"
+						? item.model
+						: typeof item.model_name === "string"
+							? item.model_name
+							: "";
+			if (!id) return null;
+			const pricing =
+				item.pricing && typeof item.pricing === "object"
+					? (item.pricing as Record<string, unknown>)
+					: {};
+			const input =
+				pricing.prompt ?? pricing.input_tokens ?? item.input_price ?? item.inputPrice;
+			const output =
+				pricing.completion ??
+				pricing.output_tokens ??
+				item.output_price ??
+				item.outputPrice;
+			const inputIsPerToken = pricing.prompt != null;
+			const outputIsPerToken = pricing.completion != null;
+			return {
+				id,
+				name:
+					typeof item.name === "string"
+						? item.name
+						: typeof item.display_name === "string"
+							? item.display_name
+							: id,
+				inputPrice:
+					input == null
+						? inputPrice
+						: parsePrice(input, inputIsPerToken, inputPrice),
+				outputPrice:
+					output == null
+						? outputPrice
+						: parsePrice(output, outputIsPerToken, outputPrice),
+				contextLength:
+					typeof item.context_length === "number"
+						? item.context_length
+						: typeof item.contextLength === "number"
+							? item.contextLength
+							: null,
+				modelType:
+					typeof item.type === "string" && item.type.includes("embedding")
+						? ("embedding" as const)
+						: ("chat" as const),
+			};
+		})
+		.filter((model): model is NonNullable<typeof model> => model !== null)
+		.slice(0, 200);
+}
+
 admin.post("/channels/discover-models", async (c) => {
 	const body = parse(
 		DiscoverModelsInput,
@@ -340,50 +458,63 @@ admin.post("/channels/discover-models", async (c) => {
 			throw new BadRequestError("Invalid JSON body", "invalid_json");
 		}),
 	);
-	const modelsUrl = `${body.baseUrl.replace(/\/+$/, "")}/models`;
-	let response: Response;
-	try {
-		response = await fetch(modelsUrl, {
-			headers: { Authorization: `Bearer ${body.secret}` },
-		});
-	} catch {
-		throw new BadRequestError("Unable to reach the upstream models endpoint", "upstream_unreachable");
+	let lastStatus = 0;
+	for (const modelsUrl of modelEndpointCandidates(body.baseUrl)) {
+		try {
+			const response = await fetch(modelsUrl, {
+				headers: {
+					Accept: "application/json",
+					Authorization: `Bearer ${body.secret}`,
+				},
+			});
+			lastStatus = response.status;
+			if (!response.ok) continue;
+			const raw = await response.json().catch(() => ({}));
+			const models = discoveredModelRows(raw, body.inputPrice, body.outputPrice);
+			if (models.length > 0) {
+				return c.json({ data: models, count: models.length, source: modelsUrl });
+			}
+		} catch {
+			// Try the next common OpenAI-compatible endpoint shape.
+		}
 	}
-	if (!response.ok) {
+
+	if (lastStatus > 0) {
 		throw new BadRequestError(
-			`Upstream /models returned HTTP ${response.status}`,
+			`Upstream model endpoints returned no models (last HTTP ${lastStatus})`,
 			"upstream_models_error",
 		);
 	}
+	throw new BadRequestError(
+		"Unable to reach any compatible /models endpoint",
+		"upstream_unreachable",
+	);
+});
 
-	const raw = (await response.json().catch(() => ({}))) as Record<string, unknown>;
-	const data = Array.isArray(raw.data)
-		? raw.data
-		: Array.isArray(raw.models)
-			? raw.models
-			: [];
-	const models = data
-		.map((entry) => {
-			if (!entry || typeof entry !== "object") return null;
-			const item = entry as Record<string, unknown>;
-			const id = typeof item.id === "string" ? item.id : "";
-			if (!id) return null;
-			const pricing = item.pricing as Record<string, unknown> | undefined;
-			const parsedInput = Number(pricing?.prompt) * 1_000_000;
-			const parsedOutput = Number(pricing?.completion) * 1_000_000;
-			return {
-				id,
-				name: typeof item.name === "string" ? item.name : id,
-				inputPrice: Number.isFinite(parsedInput) && parsedInput >= 0 ? parsedInput : body.inputPrice,
-				outputPrice: Number.isFinite(parsedOutput) && parsedOutput >= 0 ? parsedOutput : body.outputPrice,
-				contextLength: typeof item.context_length === "number" ? item.context_length : null,
-				modelType: "chat" as const,
-			};
-		})
-		.filter((model): model is NonNullable<typeof model> => model !== null)
-		.slice(0, 100);
-
-	return c.json({ data: models, count: models.length });
+admin.post("/channels/test-extractor", async (c) => {
+	const body = parse(
+		TestExtractorInput,
+		await c.req.json().catch(() => {
+			throw new BadRequestError("Invalid JSON body", "invalid_json");
+		}),
+	);
+	const credits = await testCustomExtractor(body.extractorCode, body.secret);
+	if (!credits) {
+		throw new BadRequestError(
+			"The extractor did not return a readable balance",
+			"balance_extract_failed",
+		);
+	}
+	return c.json({
+		data: {
+			remaining: credits.remaining,
+			usage: credits.usage,
+			currency: credits.currency,
+			unit: credits.unit,
+			display: credits.display,
+			details: credits.details,
+		},
+	});
 });
 
 admin.post("/channels", async (c) => {
@@ -544,6 +675,9 @@ admin.post("/sync-models", async (c) => {
 		await syncFromRemote(c.env.DB);
 	}
 
+	// Rebuild custom entries as well, so older channels created before explicit
+	// catalog selection stop using the removed implicit suffix mapping.
+	await rebuildCustomCatalog(c.env.DB);
 	await syncAutoCredits(c.env.DB, c.env.ENCRYPTION_KEY, rate);
 	const origin = new URL(c.req.url).origin;
 	const purged = await purgePublicCaches(origin);

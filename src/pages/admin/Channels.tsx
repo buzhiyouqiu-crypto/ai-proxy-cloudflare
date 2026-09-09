@@ -8,11 +8,20 @@ import { useFetch } from "../../hooks/useFetch";
 
 interface ChannelModel {
 	id: string;
+	catalogModelId?: string | null;
+	catalogName?: string | null;
 	name?: string | null;
 	inputPrice: number;
 	outputPrice: number;
 	contextLength?: number | null;
 	modelType?: "chat" | "embedding";
+}
+
+interface CatalogModelOption {
+	id: string;
+	name: string | null;
+	providerId: string;
+	modelType: "chat" | "embedding";
 }
 
 interface Channel {
@@ -40,14 +49,14 @@ interface Channel {
 	addedAt: number;
 }
 
-const initialForm = {
+const createInitialForm = () => ({
 	name: "",
 	baseUrl: "",
 	websiteUrl: "",
 	secret: "",
 	defaultInputPrice: "0",
 	defaultOutputPrice: "0",
-	models: "",
+	models: [] as ChannelModel[],
 	priceMultiplier: "1",
 	extractorCode: `({
   request: {
@@ -64,38 +73,7 @@ const initialForm = {
     };
   }
 })`,
-};
-
-function parseModels(source: string): ChannelModel[] {
-	const lines = source
-		.split("\n")
-		.map((line) => line.trim())
-		.filter(Boolean);
-	if (lines.length === 0) throw new Error("请至少填写一个模型");
-
-	return lines.map((line, index) => {
-		const [id, input, output, name] = line
-			.split("|")
-			.map((part) => part.trim());
-		const inputPrice = Number(input);
-		const outputPrice = Number(output);
-		if (!id || !Number.isFinite(inputPrice) || !Number.isFinite(outputPrice)) {
-			throw new Error(
-				`第 ${index + 1} 行格式错误，应为：模型 ID | 输入价 | 输出价 | 显示名称`,
-			);
-		}
-		if (inputPrice < 0 || outputPrice < 0) {
-			throw new Error(`第 ${index + 1} 行价格不能为负数`);
-		}
-		return {
-			id,
-			name: name || id,
-			inputPrice,
-			outputPrice,
-			modelType: "chat",
-		};
-	});
-}
+});
 
 export function Channels() {
 	const { t } = useTranslation();
@@ -104,9 +82,14 @@ export function Channels() {
 		"/api/admin/channels",
 		{ staleTime: 0 },
 	);
-	const [form, setForm] = useState(initialForm);
+	const { data: catalogModels } = useFetch<CatalogModelOption[]>(
+		"/api/admin/channels/catalog-models",
+		{ staleTime: 0 },
+	);
+	const [form, setForm] = useState(createInitialForm);
 	const [saving, setSaving] = useState(false);
 	const [discovering, setDiscovering] = useState(false);
+	const [testingExtractor, setTestingExtractor] = useState(false);
 	const [refreshingId, setRefreshingId] = useState<string | null>(null);
 
 	const request = async (url: string, init?: RequestInit) => {
@@ -130,7 +113,22 @@ export function Channels() {
 		event.preventDefault();
 		setSaving(true);
 		try {
-			const models = parseModels(form.models);
+			if (form.models.length === 0) throw new Error("请至少添加一个模型");
+			const models = form.models.map((model, index) => {
+				if (!model.id.trim()) {
+					throw new Error(`第 ${index + 1} 个模型缺少上游模型 ID`);
+				}
+				if (model.inputPrice < 0 || model.outputPrice < 0) {
+					throw new Error(`第 ${index + 1} 个模型价格不能为负数`);
+				}
+				return {
+					...model,
+					id: model.id.trim(),
+					catalogModelId: model.catalogModelId?.trim() || null,
+					catalogName: model.catalogModelId ? model.catalogName ?? null : null,
+					name: model.name?.trim() || model.id.trim(),
+				};
+			});
 			await request("/api/admin/channels", {
 				method: "POST",
 				body: JSON.stringify({
@@ -145,7 +143,7 @@ export function Channels() {
 					priceMultiplier: Number(form.priceMultiplier) || 1,
 				}),
 			});
-			setForm(initialForm);
+			setForm(createInitialForm());
 			refetch();
 			toast.success("渠道已添加");
 		} catch (error) {
@@ -173,19 +171,94 @@ export function Channels() {
 			});
 			const models = (body.data as ChannelModel[]) ?? [];
 			if (!models.length) throw new Error("上游没有返回可用模型");
-			setForm((current) => ({
-				...current,
-				models: models
-					.map((model) =>
-						[model.id, model.inputPrice, model.outputPrice, model.name ?? model.id].join(" | "),
-					)
-					.join("\n"),
-			}));
+			setForm((current) => {
+				const merged = new Map(current.models.map((model) => [model.id, model]));
+				for (const model of models) {
+					const existing = merged.get(model.id);
+					merged.set(model.id, {
+						...model,
+						...existing,
+						catalogModelId: existing?.catalogModelId ?? null,
+					});
+				}
+				return { ...current, models: [...merged.values()] };
+			});
 			toast.success(`已获取 ${models.length} 个模型`);
 		} catch (error) {
 			toast.error(error instanceof Error ? error.message : "获取模型失败");
 		} finally {
 			setDiscovering(false);
+		}
+	};
+
+	const addManualModel = () => {
+		setForm((current) => ({
+			...current,
+			models: [
+				...current.models,
+				{
+					id: "",
+					name: "",
+					inputPrice: Number(current.defaultInputPrice) || 0,
+					outputPrice: Number(current.defaultOutputPrice) || 0,
+					catalogModelId: null,
+					catalogName: null,
+					modelType: "chat",
+				},
+			],
+		}));
+	};
+
+	const updateModel = (index: number, patch: Partial<ChannelModel>) => {
+		setForm((current) => ({
+			...current,
+			models: current.models.map((model, modelIndex) =>
+				modelIndex === index ? { ...model, ...patch } : model,
+			),
+		}));
+	};
+
+	const removeModel = (index: number) => {
+		setForm((current) => ({
+			...current,
+			models: current.models.filter((_, modelIndex) => modelIndex !== index),
+		}));
+	};
+
+	const testExtractor = async () => {
+		if (!form.secret.trim()) {
+			toast.error("请先填写上游 API Key");
+			return;
+		}
+		if (!form.extractorCode.trim()) {
+			toast.error("请先填写余额提取器代码");
+			return;
+		}
+		setTestingExtractor(true);
+		try {
+			const body = await request("/api/admin/channels/test-extractor", {
+				method: "POST",
+				body: JSON.stringify({
+					secret: form.secret,
+					extractorCode: form.extractorCode,
+				}),
+			});
+			const result = body.data as {
+				display?: string;
+				remaining?: number | null;
+				currency?: string;
+				unit?: string;
+			};
+			const display =
+				result.display ??
+				(result.remaining == null
+					? "已返回结果"
+					: `${result.remaining} ${result.currency ?? result.unit ?? ""}`);
+			toast.success(`提取成功：${display}`);
+		} catch (error) {
+			toast.error(error instanceof Error ? error.message : "提取器测试失败");
+		} finally {
+			setTestingExtractor(false);
 		}
 	};
 
@@ -309,30 +382,100 @@ export function Channels() {
 						</label>
 					</div>
 
-					<div className="flex items-end justify-between gap-3">
-						<label className="min-w-0 flex-1 space-y-1 text-sm">
-						<span className="font-medium text-gray-700 dark:text-gray-300">
-							模型列表（每行：模型 ID | 输入价 | 输出价 | 显示名称）
-						</span>
-						<textarea
-							required
-							rows={5}
-							value={form.models}
-							placeholder={'gpt-4o | 5 | 15 | GPT-4o\ngpt-4o-mini | 0.15 | 0.6 | GPT-4o mini'}
-							onChange={(e) => setForm({ ...form, models: e.target.value })}
-							className="block w-full rounded-lg border border-gray-200 bg-white px-3.5 py-2 font-mono text-sm text-gray-900 placeholder:text-gray-400 focus:border-brand-500 focus:outline-none focus:ring-2 focus:ring-brand-500/20 dark:border-white/10 dark:bg-white/5 dark:text-white"
-						/>
-						<span className="text-xs text-gray-500">
-							价格单位是 USD / 1M tokens；如果模型 ID 能匹配已有目录（例如 gpt-5.6-luna），会统一到规范 ID，原始 ID 仍会转发给上游。
-						</span>
-						</label>
-						<Button type="button" variant="secondary" onClick={discoverModels} disabled={discovering}>
-							{discovering ? "获取中…" : "获取模型"}
-						</Button>
+					<div className="space-y-3">
+						<div className="flex flex-wrap items-center justify-between gap-3">
+							<div>
+								<span className="font-medium text-gray-700 dark:text-gray-300">
+									模型配置
+								</span>
+								<p className="text-xs text-gray-500">
+									先点击“获取模型”，再为每个上游模型选择要展示的已有规范模型；不选择则保留原始 ID。
+								</p>
+							</div>
+							<div className="flex gap-2">
+								<Button type="button" variant="secondary" onClick={addManualModel}>
+									手动添加
+								</Button>
+								<Button type="button" variant="secondary" onClick={discoverModels} disabled={discovering}>
+									{discovering ? "获取中…" : "获取模型"}
+								</Button>
+							</div>
+						</div>
+						{form.models.length === 0 ? (
+							<div className="rounded-lg border border-dashed border-gray-300 px-4 py-6 text-center text-sm text-gray-500 dark:border-white/10">
+								还没有模型；可以自动获取，或手动添加。
+							</div>
+						) : (
+							<div className="space-y-3">
+								{form.models.map((model, index) => (
+									<div key={`${model.id}-${index}`} className="rounded-lg border border-gray-200 p-3 dark:border-white/10">
+										<div className="grid gap-3 lg:grid-cols-5">
+											<label className="space-y-1 text-xs lg:col-span-2">
+												<span className="font-medium text-gray-700 dark:text-gray-300">上游模型 ID</span>
+												<Input
+													value={model.id}
+													placeholder="gpt-5.6-luna"
+													onChange={(e) => updateModel(index, { id: e.target.value })}
+												/>
+											</label>
+											<label className="space-y-1 text-xs lg:col-span-2">
+												<span className="font-medium text-gray-700 dark:text-gray-300">规范模型（可选）</span>
+												<select
+													value={model.catalogModelId ?? ""}
+													onChange={(e) => {
+									const value = e.target.value || null;
+									const option = catalogModels?.find((item) => item.id === value);
+									updateModel(index, {
+										catalogModelId: value,
+										catalogName: option?.name ?? null,
+										name: value
+											? option?.name || model.name || model.id
+											: model.name === model.catalogName
+												? model.id
+												: model.name,
+									});
+													}}
+													className="block w-full rounded-lg border border-gray-200 bg-white px-3 py-2 text-sm text-gray-900 focus:border-brand-500 focus:outline-none focus:ring-2 focus:ring-brand-500/20 dark:border-white/10 dark:bg-white/5 dark:text-white"
+												>
+													<option value="">不映射，使用原始 ID</option>
+													{(catalogModels ?? []).map((option) => (
+														<option key={option.id} value={option.id}>
+															{option.name ? `${option.name} · ${option.id}` : option.id}
+														</option>
+													))}
+												</select>
+											</label>
+											<label className="space-y-1 text-xs">
+												<span className="font-medium text-gray-700 dark:text-gray-300">输入价 / 1M</span>
+												<Input type="number" min="0" step="0.000001" value={model.inputPrice} onChange={(e) => updateModel(index, { inputPrice: Number(e.target.value) || 0 })} />
+											</label>
+											<label className="space-y-1 text-xs">
+												<span className="font-medium text-gray-700 dark:text-gray-300">输出价 / 1M</span>
+												<Input type="number" min="0" step="0.000001" value={model.outputPrice} onChange={(e) => updateModel(index, { outputPrice: Number(e.target.value) || 0 })} />
+											</label>
+										</div>
+										<div className="mt-3 flex items-end gap-3">
+											<label className="min-w-0 flex-1 space-y-1 text-xs">
+												<span className="font-medium text-gray-700 dark:text-gray-300">显示名称</span>
+												<Input value={model.name ?? ""} onChange={(e) => updateModel(index, { name: e.target.value })} />
+											</label>
+											<Button type="button" variant="destructive" size="sm" onClick={() => removeModel(index)}>
+												删除
+											</Button>
+										</div>
+									</div>
+								))}
+							</div>
+						)}
 					</div>
 
 					<label className="block space-y-1 text-sm">
-						<span className="font-medium text-gray-700 dark:text-gray-300">余额提取器代码（管理员可见）</span>
+						<div className="flex flex-wrap items-center justify-between gap-2">
+							<span className="font-medium text-gray-700 dark:text-gray-300">余额提取器代码（管理员可见）</span>
+							<Button type="button" variant="secondary" size="sm" onClick={testExtractor} disabled={testingExtractor}>
+								{testingExtractor ? "测试中…" : "测试提取器"}
+							</Button>
+						</div>
 						<textarea
 							rows={11}
 							value={form.extractorCode}
@@ -340,7 +483,7 @@ export function Channels() {
 							className="block w-full rounded-lg border border-gray-200 bg-white px-3.5 py-2 font-mono text-xs text-gray-900 placeholder:text-gray-400 focus:border-brand-500 focus:outline-none focus:ring-2 focus:ring-brand-500/20 dark:border-white/10 dark:bg-white/5 dark:text-white"
 						/>
 						<span className="text-xs text-gray-500">
-							支持 request.url/method/headers、response 字段路径、变量和简单加减乘除；用 {"{{API_KEY}}"} 代表上游 Key。返回 unit 为 USD/CNY 时按金额处理，返回 display/extra 或百分比 unit 时按配额文本展示。
+							测试只请求上游并解析结果，不会保存渠道；支持 request.url/method/headers、response 字段路径、变量和简单加减乘除。用 {"{{API_KEY}}"} 代表上游 Key；返回 unit 为 USD/CNY 时按金额处理，返回 display/extra 或百分比 unit 时按配额文本展示。
 						</span>
 					</label>
 

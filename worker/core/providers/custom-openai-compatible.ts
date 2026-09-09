@@ -7,6 +7,9 @@ import type {
 
 export interface CustomChannelModel {
 	id: string;
+	/** Optional catalog target selected explicitly by the administrator. */
+	catalogModelId?: string | null;
+	catalogName?: string | null;
 	name?: string | null;
 	inputPrice: number;
 	outputPrice: number;
@@ -454,6 +457,13 @@ async function fetchCreditsWithExtractor(
 	} catch {
 		return null;
 	}
+}
+
+export function testCustomExtractor(
+	code: string,
+	secret: string,
+): Promise<ProviderCredits | null> {
+	return fetchCreditsWithExtractor(code, secret);
 }
 
 /** Adapter created from one administrator-managed channel credential. */
