@@ -23,6 +23,7 @@ export interface ProviderInfo {
 export interface ProviderCredits {
 	remaining: number | null;
 	usage: number | null;
+	currency?: "USD" | "CNY";
 }
 
 export type ParsedModel = Omit<DbModelCatalog, "refreshed_at" | "is_active">;

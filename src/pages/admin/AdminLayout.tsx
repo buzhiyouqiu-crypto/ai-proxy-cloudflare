@@ -1,5 +1,6 @@
 import {
 	ArrowLeftIcon,
+	AdjustmentsHorizontalIcon,
 	ChartBarIcon,
 	GiftIcon,
 	TableCellsIcon,
@@ -22,6 +23,11 @@ function AdminNav({ onNavigate }: { onNavigate?: () => void }) {
 			end: true,
 		},
 		{ name: t("admin.users"), href: "/admin/users", icon: UserGroupIcon },
+		{
+			name: t("admin.channels"),
+			href: "/admin/channels",
+			icon: AdjustmentsHorizontalIcon,
+		},
 		{
 			name: t("admin.gift_cards_title"),
 			href: "/admin/gift-cards",

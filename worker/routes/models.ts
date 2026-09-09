@@ -46,13 +46,17 @@ publicModelsRouter.get("/", edgeCache(3600), async (c) => {
 	const dao = new CatalogDao(c.env.DB);
 	const candleDao = new CandleDao(c.env.DB);
 
-	const [all, inputPrices, outputPrices] = await Promise.all([
+	const [all, inputPrices, outputPrices, customChannel] = await Promise.all([
 		dao.getActiveWithBestMultiplier(),
 		candleDao.getLatestPrices("model:input"),
 		candleDao.getLatestPrices("model:output"),
+		c.env.DB.prepare(
+			"SELECT 1 FROM upstream_credentials WHERE provider_id = 'custom' AND is_enabled = 1 LIMIT 1",
+		).first(),
 	]);
 
 	const visibleIds = new Set(getVisibleProviders().map((p) => p.info.id));
+	if (customChannel) visibleIds.add("custom");
 
 	// USD-per-M-tokens → USD-per-token string (OpenRouter format)
 	const toUsdPerToken = (usdPerM: number) => String(usdPerM / 1_000_000);
@@ -159,12 +163,16 @@ dashboardModelsRouter.get("/", edgeCache(3600), async (c) => {
 	const dao = new CatalogDao(c.env.DB);
 	const candleDao = new CandleDao(c.env.DB);
 
-	const [all, providerMuls] = await Promise.all([
+	const [all, providerMuls, customChannel] = await Promise.all([
 		dao.getActiveWithBestMultiplier(),
 		candleDao.getLatestPrices("provider"),
+		c.env.DB.prepare(
+			"SELECT 1 FROM upstream_credentials WHERE provider_id = 'custom' AND is_enabled = 1 LIMIT 1",
+		).first(),
 	]);
 
 	const visibleIds = new Set(getVisibleProviders().map((p) => p.info.id));
+	if (customChannel) visibleIds.add("custom");
 
 	const data = all
 		.filter((m) => visibleIds.has(m.provider_id))

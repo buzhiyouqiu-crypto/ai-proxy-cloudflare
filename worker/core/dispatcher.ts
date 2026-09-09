@@ -9,6 +9,7 @@ import { BadRequestError, NoKeyAvailableError } from "../shared/errors";
 import { CatalogDao } from "./db/catalog-dao";
 import { CredentialsDao } from "./db/credentials-dao";
 import type { DbCredential } from "./db/schema";
+import { createCustomProvider } from "./providers/custom-openai-compatible";
 import type { ProviderAdapter } from "./providers/interface";
 import { getProvider } from "./providers/registry";
 
@@ -49,8 +50,8 @@ export async function dispatchAll(
 			continue;
 		if (excludeProviderIds?.includes(offering.provider_id)) continue;
 		if (offering.input_price < 0 || offering.output_price < 0) continue;
-		const provider = getProvider(offering.provider_id);
-		if (!provider) continue;
+		const registeredProvider = getProvider(offering.provider_id);
+		if (!registeredProvider && offering.provider_id !== "custom") continue;
 
 		let credentials = await credDao.selectAvailable(
 			offering.provider_id,
@@ -64,6 +65,9 @@ export async function dispatchAll(
 		}
 
 		for (const credential of credentials) {
+			const provider: ProviderAdapter | null =
+				registeredProvider ?? createCustomProvider(credential);
+			if (!provider) continue;
 			candidates.push({
 				credential,
 				provider,

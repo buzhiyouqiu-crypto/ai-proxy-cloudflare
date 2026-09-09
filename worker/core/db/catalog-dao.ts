@@ -89,6 +89,13 @@ export class CatalogDao {
 		}
 	}
 
+	async deactivateProvider(providerId: string): Promise<void> {
+		await this.db
+			.prepare("UPDATE model_catalog SET is_active = 0 WHERE provider_id = ?")
+			.bind(providerId)
+			.run();
+	}
+
 	async getAllActive(): Promise<DbModelCatalog[]> {
 		const res = await this.db
 			.prepare("SELECT * FROM model_catalog WHERE is_active = 1")

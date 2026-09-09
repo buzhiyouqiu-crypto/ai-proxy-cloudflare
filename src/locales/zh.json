@@ -404,6 +404,7 @@
 		"registered_users": "注册用户数",
 		"active_users": "活跃用户数",
 		"users": "用户管理",
+		"channels": "上游渠道",
 		"user_id": "用户 ID",
 		"balance": "余额",
 		"topped_up": "充值",

@@ -18,6 +18,7 @@ import {
 	getProvider,
 	parseOpenRouterModels,
 } from "../providers/registry";
+import { createCustomProvider } from "../providers/custom-openai-compatible";
 
 const OPENROUTER_EMBEDDINGS_URL =
 	"https://openrouter.ai/api/v1/embeddings/models";
@@ -241,15 +242,17 @@ export async function syncAutoCredits(
 
 	const results = await Promise.allSettled(
 		autos.map(async (credential) => {
-			const provider = getProvider(credential.provider_id);
+			const provider =
+				getProvider(credential.provider_id) ?? createCustomProvider(credential);
 			if (!provider) return;
 
 			const secret = await dao.decryptSecret(credential);
 			const credits = await provider.fetchCredits(secret);
 			if (credits?.remaining == null) return;
 
+			const currency = credits.currency ?? provider.info.currency;
 			const usd =
-				provider.info.currency === "CNY"
+				currency === "CNY"
 					? credits.remaining / cnyUsdRate
 					: credits.remaining;
 

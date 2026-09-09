@@ -52,6 +52,20 @@ systemRouter.get("/providers", edgeCache(3600), async (c) => {
 		isSubscription: p.info.isSubscription ?? false,
 		credentialGuide: p.info.credentialGuide ?? null,
 	}));
+	const customChannel = await c.env.DB.prepare(
+		"SELECT 1 FROM upstream_credentials WHERE provider_id = 'custom' AND is_enabled = 1 LIMIT 1",
+	).first();
+	if (customChannel) {
+		providers.push({
+			id: "custom",
+			name: "自定义 OpenAI 兼容渠道",
+			logoUrl: "https://api.iconify.design/mdi:server-network.svg",
+			supportsAutoCredits: false,
+			authType: "api_key",
+			isSubscription: false,
+			credentialGuide: { placeholder: "sk-..." },
+		});
+	}
 	return c.json({ data: providers });
 });
 
