@@ -1,4 +1,3 @@
-import { useTranslation } from "react-i18next";
 import { Link } from "react-router-dom";
 
 interface LogoProps {
@@ -20,16 +19,15 @@ export function Logo({
 	to = "/",
 	className = "",
 }: LogoProps) {
-	const { t } = useTranslation();
 	const s = SIZES[size];
 
 	const content = (
 		<>
-			<img src="/logo.png" alt="Keyaos" className={s.img} />
+			<img src="/keyloom-logo.png" alt="KeyLoom" className={s.img} />
 			<span
 				className={`${s.text} font-bold text-gray-900 dark:text-white tracking-tight`}
 			>
-				{t("brand.name")}
+				KeyLoom
 			</span>
 		</>
 	);
