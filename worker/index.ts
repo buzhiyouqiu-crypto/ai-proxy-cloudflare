@@ -272,3 +272,7 @@ export default {
 		);
 	},
 };
+
+// Keep the old class export so existing Durable Object instances can be
+// updated safely when this Worker replaces the previous implementation.
+export { UsageDbDurableObject } from "./compat/usage-db";
