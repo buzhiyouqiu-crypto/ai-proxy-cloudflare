@@ -11,6 +11,7 @@ compatibility_flags = ["nodejs_compat"]
 # `wrangler secret put <NAME>` and read from .dev.vars locally.
 [vars]
 CNY_USD_RATE = "7"
+CORS_ORIGIN = "https://keyloom.cc.cd"
 
 [placement]
 mode = "smart"
@@ -35,7 +36,7 @@ new_sqlite_classes = ["UsageDbDurableObject"]
 
 [observability]
 enabled = true
-head_sampling_rate = 1
+head_sampling_rate = 0.1
 
 [triggers]
 crons = ["*/1 * * * *", "0 */6 * * *"]

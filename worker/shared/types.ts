@@ -6,6 +6,8 @@ export type Env = {
 	CLERK_SECRET_KEY?: string;
 	PLATFORM_OWNER_ID?: string;
 	CNY_USD_RATE?: string;
+	/** Allowed browser origin for management API CORS. */
+	CORS_ORIGIN?: string;
 	STRIPE_SECRET_KEY?: string;
 	STRIPE_WEBHOOK_SECRET?: string;
 	ASSETS?: Fetcher;

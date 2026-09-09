@@ -1,5 +1,5 @@
 import { clerkMiddleware, getAuth } from "@hono/clerk-auth";
-import { type Context, Hono } from "hono";
+import { type Context, Hono, type Next } from "hono";
 import { cors } from "hono/cors";
 import type { ContentfulStatusCode } from "hono/utils/http-status";
 import { ApiKeysDao } from "./core/db/api-keys-dao";
@@ -37,6 +37,9 @@ import { log } from "./shared/logger";
 import type { AppEnv, Env } from "./shared/types";
 
 const CORE_OWNER = "self";
+const DEFAULT_CORS_ORIGIN = "https://keyloom.cc.cd";
+const DEFAULT_BODY_LIMIT = 2 * 1024 * 1024;
+const CHAT_BODY_LIMIT = 10 * 1024 * 1024;
 
 const app = new Hono<AppEnv>();
 
@@ -64,8 +67,16 @@ app.onError((err, c) => {
 app.use(
 	"*",
 	cors({
-		origin: "*",
-		allowMethods: ["GET", "POST", "PUT", "DELETE", "OPTIONS"],
+		origin: (origin, c) => {
+			// The OpenAI-compatible API is intentionally usable from browser
+			// clients. Management endpoints, however, should only be callable
+			// cross-origin by the deployed Keyloom frontend.
+			if (c.req.path.startsWith("/v1/")) return origin || null;
+			return origin === (c.env.CORS_ORIGIN || DEFAULT_CORS_ORIGIN)
+				? origin
+				: null;
+		},
+		allowMethods: ["GET", "POST", "PUT", "PATCH", "DELETE", "OPTIONS"],
 		allowHeaders: [
 			"Content-Type",
 			"Authorization",
@@ -76,6 +87,73 @@ app.use(
 		exposeHeaders: ["x-request-id", "x-provider", "x-credential-id"],
 	}),
 );
+
+function requestBodyLimit(path: string): number {
+	return path === "/api/chat" ||
+		path === "/api/threads" ||
+		path.startsWith("/api/threads/") ||
+		path === "/v1/chat/completions" ||
+		path === "/v1/messages" ||
+		path === "/v1/embeddings"
+		? CHAT_BODY_LIMIT
+		: DEFAULT_BODY_LIMIT;
+}
+
+async function enforceRequestBodyLimit(c: Context<AppEnv>, next: Next) {
+	if (["GET", "HEAD", "OPTIONS"].includes(c.req.method)) return next();
+
+	const limit = requestBodyLimit(c.req.path);
+	const contentLength = c.req.header("content-length");
+	if (contentLength) {
+		const bytes = Number(contentLength);
+		if (!Number.isSafeInteger(bytes) || bytes > limit) {
+			return c.json(
+				{
+					error: {
+						message: `Request body exceeds ${Math.floor(limit / 1024 / 1024)} MiB limit`,
+						type: "invalid_request_error",
+						code: "request_body_too_large",
+					},
+				},
+				413,
+			);
+		}
+	}
+
+	// Content-Length is optional for chunked requests. Inspect a clone so the
+	// route can still consume the original body, while stopping as soon as the
+	// configured limit is crossed.
+	const clonedBody = c.req.raw.clone().body;
+	if (!clonedBody) return next();
+	const reader = clonedBody.getReader();
+	let total = 0;
+	try {
+		for (;;) {
+			const { done, value } = await reader.read();
+			if (done) break;
+			total += value.byteLength;
+			if (total > limit) {
+				await reader.cancel();
+				return c.json(
+					{
+						error: {
+							message: `Request body exceeds ${Math.floor(limit / 1024 / 1024)} MiB limit`,
+							type: "invalid_request_error",
+							code: "request_body_too_large",
+						},
+					},
+					413,
+				);
+			}
+		}
+	} finally {
+		reader.releaseLock();
+	}
+	return next();
+}
+
+app.use("/api/*", enforceRequestBodyLimit);
+app.use("/v1/*", enforceRequestBodyLimit);
 
 // Baseline response hardening. These headers are safe for the SPA and API
 // responses and prevent MIME sniffing, referrer leakage, and unnecessary

@@ -131,7 +131,10 @@ function PlatformShowcase() {
 	);
 
 	const providerGroups = useMemo(
-		() => aggregateProviders(models ?? [], providers ?? []),
+		() =>
+			aggregateProviders(models ?? [], providers ?? []).filter(
+				(group) => group.provider.id !== "custom",
+			),
 		[models, providers],
 	);
 
