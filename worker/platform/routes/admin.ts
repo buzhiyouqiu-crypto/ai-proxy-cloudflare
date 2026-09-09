@@ -54,9 +54,15 @@ const CustomChannelInput = z.object({
 	priceMultiplier: z.number().positive().max(10).optional(),
 });
 
+const CustomChannelUpdateInput = CustomChannelInput.partial().extend({
+	isEnabled: z.boolean().optional(),
+	priceMultiplier: z.number().positive().max(10).optional(),
+});
+
 const DiscoverModelsInput = z.object({
 	baseUrl: z.string().trim().url(),
-	secret: z.string().trim().min(1).max(1000),
+	secret: z.string().trim().max(1000).optional(),
+	channelId: z.string().trim().min(1).optional(),
 	inputPrice: z.number().min(0).max(1_000_000).default(0),
 	outputPrice: z.number().min(0).max(1_000_000).default(0),
 });
@@ -297,6 +303,7 @@ admin.get("/channels", async (c) => {
 					models: channel?.models ?? [],
 					defaultInputPrice: channel?.defaultInputPrice ?? 0,
 					defaultOutputPrice: channel?.defaultOutputPrice ?? 0,
+					extractorCode: channel?.extractorCode ?? "",
 					hasExtractor: Boolean(channel?.extractorCode?.trim()),
 					secretHint: row.secret_hint,
 					quota: row.quota,
@@ -312,23 +319,42 @@ admin.get("/channels", async (c) => {
 
 admin.get("/channels/catalog-models", async (c) => {
 	const rows = await new CatalogDao(c.env.DB).getAllActive();
+	const providerRank = (modelId: string, providerId: string) => {
+		const organization = modelId.includes("/")
+			? modelId.slice(0, modelId.indexOf("/"))
+			: null;
+		if (providerId === organization || (!organization && providerId === "openai")) return 0;
+		if (providerId === "openrouter") return 1;
+		if (providerId === "custom") return 3;
+		return 2;
+	};
 	const options = new Map<
 		string,
 		{
 			id: string;
-			name: string | null;
-			providerId: string;
-			modelType: "chat" | "embedding";
-		}
+				name: string | null;
+				providerId: string;
+				modelType: "chat" | "embedding";
+				inputPrice: number;
+				outputPrice: number;
+				contextLength: number | null;
+			}
 	>();
 	for (const row of rows) {
 		const current = options.get(row.model_id);
-		if (!current || (row.provider_id === "openai" && current.providerId !== "openai")) {
+		const rank = providerRank(row.model_id, row.provider_id);
+		const currentRank = current
+			? providerRank(row.model_id, current.providerId)
+			: Number.POSITIVE_INFINITY;
+		if (!current || rank < currentRank) {
 			options.set(row.model_id, {
 				id: row.model_id,
 				name: row.name,
 				providerId: row.provider_id,
 				modelType: row.model_type,
+				inputPrice: Math.max(0, row.input_price),
+				outputPrice: Math.max(0, row.output_price),
+				contextLength: row.context_length,
 			});
 		}
 	}
@@ -458,13 +484,29 @@ admin.post("/channels/discover-models", async (c) => {
 			throw new BadRequestError("Invalid JSON body", "invalid_json");
 		}),
 	);
+	let secret = body.secret;
+	if (!secret && body.channelId) {
+		const row = await c.env.DB.prepare(
+			"SELECT * FROM upstream_credentials WHERE id = ? AND provider_id = 'custom'",
+		)
+			.bind(body.channelId)
+			.first<DbCredential>();
+		if (!row) throw new BadRequestError("Channel not found", "credential_not_found");
+		secret = await new CredentialsDao(c.env.DB, c.env.ENCRYPTION_KEY).decryptSecret(row);
+	}
+	if (!secret) {
+		throw new BadRequestError(
+			"An upstream API key is required to discover models",
+			"upstream_key_required",
+		);
+	}
 	let lastStatus = 0;
 	for (const modelsUrl of modelEndpointCandidates(body.baseUrl)) {
 		try {
 			const response = await fetch(modelsUrl, {
-				headers: {
-					Accept: "application/json",
-					Authorization: `Bearer ${body.secret}`,
+					headers: {
+						Accept: "application/json",
+						Authorization: `Bearer ${secret}`,
 				},
 			});
 			lastStatus = response.status;
@@ -499,6 +541,42 @@ admin.post("/channels/test-extractor", async (c) => {
 		}),
 	);
 	const credits = await testCustomExtractor(body.extractorCode, body.secret);
+	if (!credits) {
+		throw new BadRequestError(
+			"The extractor did not return a readable balance",
+			"balance_extract_failed",
+		);
+	}
+	return c.json({
+		data: {
+			remaining: credits.remaining,
+			usage: credits.usage,
+			currency: credits.currency,
+			unit: credits.unit,
+			display: credits.display,
+			details: credits.details,
+		},
+	});
+});
+
+admin.post("/channels/:id/test-extractor", async (c) => {
+	const id = c.req.param("id");
+	const body = parse(
+		z.object({ extractorCode: z.string().trim().min(1).max(20_000) }),
+		await c.req.json().catch(() => {
+			throw new BadRequestError("Invalid JSON body", "invalid_json");
+		}),
+	);
+	const row = await c.env.DB.prepare(
+		"SELECT * FROM upstream_credentials WHERE id = ? AND provider_id = 'custom'",
+	)
+		.bind(id)
+		.first<DbCredential>();
+	if (!row) throw new BadRequestError("Channel not found", "credential_not_found");
+	const credits = await testCustomExtractor(
+		body.extractorCode,
+		await new CredentialsDao(c.env.DB, c.env.ENCRYPTION_KEY).decryptSecret(row),
+	);
 	if (!credits) {
 		throw new BadRequestError(
 			"The extractor did not return a readable balance",
@@ -610,38 +688,71 @@ admin.post("/channels/:id/refresh-balance", async (c) => {
 
 admin.patch("/channels/:id", async (c) => {
 	const body = parse(
-		z.object({
-			isEnabled: z.boolean().optional(),
-			priceMultiplier: z.number().positive().max(10).optional(),
-		}),
+		CustomChannelUpdateInput,
 		await c.req.json().catch(() => {
 			throw new BadRequestError("Invalid JSON body", "invalid_json");
 		}),
 	);
-	if (body.isEnabled == null && body.priceMultiplier == null) {
+	const channelFields = [
+		"name",
+		"baseUrl",
+		"websiteUrl",
+		"secret",
+		"models",
+		"defaultInputPrice",
+		"defaultOutputPrice",
+		"extractorCode",
+	] as const;
+	const hasChannelUpdate = channelFields.some((field) => body[field] !== undefined);
+	if (!hasChannelUpdate && body.isEnabled == null && body.priceMultiplier == null) {
 		throw new BadRequestError("No settings to update", "settings_required");
 	}
 
 	const id = c.req.param("id");
 	const row = await c.env.DB.prepare(
-		"SELECT id FROM upstream_credentials WHERE id = ? AND provider_id = 'custom'",
+		"SELECT * FROM upstream_credentials WHERE id = ? AND provider_id = 'custom'",
 	)
 		.bind(id)
-		.first<{ id: string }>();
+		.first<DbCredential>();
 	if (!row) throw new BadRequestError("Channel not found", "credential_not_found");
 
-	const current = await c.env.DB.prepare(
-		"SELECT is_enabled, price_multiplier FROM upstream_credentials WHERE id = ?",
-	)
-		.bind(id)
-		.first<{ is_enabled: number; price_multiplier: number }>();
-	if (!current) throw new BadRequestError("Channel not found", "credential_not_found");
+	if (hasChannelUpdate) {
+		const current = parseCustomChannelMetadata(row.metadata);
+		if (!current) {
+			throw new BadRequestError("Invalid custom channel metadata", "channel_invalid");
+		}
+		const metadata = {
+			...current,
+			name: body.name ?? current.name,
+			baseUrl: body.baseUrl?.replace(/\/+$/, "") ?? current.baseUrl,
+			websiteUrl: body.websiteUrl === undefined ? current.websiteUrl ?? null : body.websiteUrl,
+			models: body.models ?? current.models,
+			defaultInputPrice: body.defaultInputPrice ?? current.defaultInputPrice ?? 0,
+			defaultOutputPrice: body.defaultOutputPrice ?? current.defaultOutputPrice ?? 0,
+			extractorCode:
+				body.extractorCode === undefined
+					? current.extractorCode ?? null
+					: body.extractorCode?.trim() || null,
+		};
+		const url = new URL(metadata.baseUrl);
+		if (url.protocol !== "http:" && url.protocol !== "https:") {
+			throw new BadRequestError("baseUrl must use http or https", "invalid_url");
+		}
+		await new CredentialsDao(c.env.DB, c.env.ENCRYPTION_KEY).updateCustomChannel(id, {
+			metadata,
+			secret: body.secret,
+			isEnabled: body.isEnabled == null ? row.is_enabled : body.isEnabled ? 1 : 0,
+			priceMultiplier: body.priceMultiplier ?? row.price_multiplier,
+			quotaSource: metadata.extractorCode ? "auto" : null,
+		});
+	} else {
+		await new CredentialsDao(c.env.DB, c.env.ENCRYPTION_KEY).updateSettings(
+			id,
+			body.isEnabled == null ? row.is_enabled : body.isEnabled ? 1 : 0,
+			body.priceMultiplier ?? row.price_multiplier,
+		);
+	}
 
-	await new CredentialsDao(c.env.DB, c.env.ENCRYPTION_KEY).updateSettings(
-		id,
-		body.isEnabled == null ? current.is_enabled : body.isEnabled ? 1 : 0,
-		body.priceMultiplier ?? current.price_multiplier,
-	);
 	await rebuildCustomCatalog(c.env.DB);
 	await purgePublicCaches(new URL(c.req.url).origin);
 	return c.json({ success: true });

@@ -199,6 +199,59 @@ export class CredentialsDao {
 			.run();
 	}
 
+	async updateCustomChannel(
+		id: string,
+		params: {
+			metadata: Record<string, unknown>;
+			secret?: string;
+			isEnabled: number;
+			priceMultiplier: number;
+			quotaSource?: "auto" | null;
+		},
+	): Promise<void> {
+		const metadata = JSON.stringify(params.metadata);
+		if (params.secret) {
+			const [encryptedSecret, secretHash] = await Promise.all([
+				encrypt(params.secret, this.encryptionKey),
+				sha256(params.secret),
+			]);
+			await this.db
+				.prepare(
+					`UPDATE upstream_credentials
+					 SET encrypted_secret = ?, secret_hash = ?, secret_hint = ?,
+					     metadata = ?, is_enabled = ?, price_multiplier = ?, quota_source = ?
+					 WHERE id = ? AND provider_id = 'custom'`,
+				)
+				.bind(
+					encryptedSecret,
+					secretHash,
+					briefHint(params.secret),
+					metadata,
+					params.isEnabled,
+					params.priceMultiplier,
+					params.quotaSource ?? null,
+					id,
+				)
+				.run();
+			return;
+		}
+
+		await this.db
+			.prepare(
+				`UPDATE upstream_credentials
+				 SET metadata = ?, is_enabled = ?, price_multiplier = ?, quota_source = ?
+				 WHERE id = ? AND provider_id = 'custom'`,
+			)
+			.bind(
+				metadata,
+				params.isEnabled,
+				params.priceMultiplier,
+				params.quotaSource ?? null,
+				id,
+			)
+			.run();
+	}
+
 	async updateSettings(
 		id: string,
 		isEnabled: number,

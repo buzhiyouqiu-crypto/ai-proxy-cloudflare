@@ -1,8 +1,18 @@
-import { ArrowPathIcon, TrashIcon, PowerIcon, PlusIcon } from "@heroicons/react/24/outline";
+import {
+	ArrowPathIcon,
+	PencilSquareIcon,
+	PlusIcon,
+	PowerIcon,
+	TrashIcon,
+} from "@heroicons/react/24/outline";
 import { type FormEvent, useState } from "react";
 import { useTranslation } from "react-i18next";
 import toast from "react-hot-toast";
 import { useAuth } from "../../auth";
+import {
+	ModelCatalogSelect,
+	type ModelCatalogOption,
+} from "../../components/ModelCatalogSelect";
 import { Button, Card, Input } from "../../components/ui";
 import { useFetch } from "../../hooks/useFetch";
 
@@ -17,13 +27,6 @@ interface ChannelModel {
 	modelType?: "chat" | "embedding";
 }
 
-interface CatalogModelOption {
-	id: string;
-	name: string | null;
-	providerId: string;
-	modelType: "chat" | "embedding";
-}
-
 interface Channel {
 	id: string;
 	name: string;
@@ -32,6 +35,7 @@ interface Channel {
 	models: ChannelModel[];
 	defaultInputPrice: number;
 	defaultOutputPrice: number;
+	extractorCode: string;
 	hasExtractor: boolean;
 	secretHint: string;
 	quota: number | null;
@@ -82,11 +86,12 @@ export function Channels() {
 		"/api/admin/channels",
 		{ staleTime: 0 },
 	);
-	const { data: catalogModels } = useFetch<CatalogModelOption[]>(
+	const { data: catalogModels } = useFetch<ModelCatalogOption[]>(
 		"/api/admin/channels/catalog-models",
 		{ staleTime: 0 },
 	);
 	const [form, setForm] = useState(createInitialForm);
+	const [editingId, setEditingId] = useState<string | null>(null);
 	const [saving, setSaving] = useState(false);
 	const [discovering, setDiscovering] = useState(false);
 	const [testingExtractor, setTestingExtractor] = useState(false);
@@ -109,11 +114,35 @@ export function Channels() {
 		return body;
 	};
 
+	const resetForm = () => {
+		setEditingId(null);
+		setForm(createInitialForm());
+	};
+
+	const editChannel = (channel: Channel) => {
+		setEditingId(channel.id);
+		setForm({
+			name: channel.name,
+			baseUrl: channel.baseUrl,
+			websiteUrl: channel.websiteUrl ?? "",
+			secret: "",
+			defaultInputPrice: String(channel.defaultInputPrice),
+			defaultOutputPrice: String(channel.defaultOutputPrice),
+			models: channel.models.map((model) => ({ ...model })),
+			priceMultiplier: String(channel.priceMultiplier),
+			extractorCode: channel.extractorCode || "",
+		});
+		window.scrollTo({ top: 0, behavior: "smooth" });
+	};
+
 	const handleSubmit = async (event: FormEvent<HTMLFormElement>) => {
 		event.preventDefault();
 		setSaving(true);
 		try {
 			if (form.models.length === 0) throw new Error("请至少添加一个模型");
+			if (!editingId && !form.secret.trim()) {
+				throw new Error("请填写上游 API Key");
+			}
 			const models = form.models.map((model, index) => {
 				if (!model.id.trim()) {
 					throw new Error(`第 ${index + 1} 个模型缺少上游模型 ID`);
@@ -129,23 +158,25 @@ export function Channels() {
 					name: model.name?.trim() || model.id.trim(),
 				};
 			});
-			await request("/api/admin/channels", {
-				method: "POST",
-				body: JSON.stringify({
-					name: form.name,
-					baseUrl: form.baseUrl,
-					websiteUrl: form.websiteUrl || null,
-					secret: form.secret,
-					models,
-					defaultInputPrice: Number(form.defaultInputPrice) || 0,
-					defaultOutputPrice: Number(form.defaultOutputPrice) || 0,
-					extractorCode: form.extractorCode.trim() || null,
-					priceMultiplier: Number(form.priceMultiplier) || 1,
-				}),
+			const payload: Record<string, unknown> = {
+				name: form.name,
+				baseUrl: form.baseUrl,
+				websiteUrl: form.websiteUrl || null,
+				models,
+				defaultInputPrice: Number(form.defaultInputPrice) || 0,
+				defaultOutputPrice: Number(form.defaultOutputPrice) || 0,
+				extractorCode: form.extractorCode.trim() || null,
+				priceMultiplier: Number(form.priceMultiplier) || 1,
+			};
+			if (form.secret.trim()) payload.secret = form.secret.trim();
+			await request(editingId ? `/api/admin/channels/${editingId}` : "/api/admin/channels", {
+				method: editingId ? "PATCH" : "POST",
+				body: JSON.stringify(payload),
 			});
-			setForm(createInitialForm());
+			const wasEditing = Boolean(editingId);
+			resetForm();
 			refetch();
-			toast.success("渠道已添加");
+			toast.success(wasEditing ? "渠道已更新" : "渠道已添加");
 		} catch (error) {
 			toast.error(error instanceof Error ? error.message : "添加渠道失败");
 		} finally {
@@ -154,7 +185,7 @@ export function Channels() {
 	};
 
 	const discoverModels = async () => {
-		if (!form.baseUrl || !form.secret) {
+		if (!form.baseUrl || (!form.secret && !editingId)) {
 			toast.error("请先填写 Base URL 和上游 API Key");
 			return;
 		}
@@ -164,7 +195,8 @@ export function Channels() {
 				method: "POST",
 				body: JSON.stringify({
 					baseUrl: form.baseUrl,
-					secret: form.secret,
+					secret: form.secret || undefined,
+					channelId: editingId || undefined,
 					inputPrice: Number(form.defaultInputPrice) || 0,
 					outputPrice: Number(form.defaultOutputPrice) || 0,
 				}),
@@ -226,7 +258,7 @@ export function Channels() {
 	};
 
 	const testExtractor = async () => {
-		if (!form.secret.trim()) {
+		if (!form.secret.trim() && !editingId) {
 			toast.error("请先填写上游 API Key");
 			return;
 		}
@@ -236,13 +268,19 @@ export function Channels() {
 		}
 		setTestingExtractor(true);
 		try {
-			const body = await request("/api/admin/channels/test-extractor", {
+			const body = await request(
+				editingId
+					? `/api/admin/channels/${editingId}/test-extractor`
+					: "/api/admin/channels/test-extractor",
+				{
 				method: "POST",
-				body: JSON.stringify({
-					secret: form.secret,
-					extractorCode: form.extractorCode,
-				}),
-			});
+				body: JSON.stringify(
+					editingId
+						? { extractorCode: form.extractorCode }
+						: { secret: form.secret, extractorCode: form.extractorCode },
+				),
+				},
+			);
 			const result = body.data as {
 				display?: string;
 				remaining?: number | null;
@@ -311,9 +349,13 @@ export function Channels() {
 
 			<Card>
 				<div className="mb-5 flex items-center gap-2">
-					<PlusIcon className="size-5 text-brand-500" />
+					{editingId ? (
+						<PencilSquareIcon className="size-5 text-brand-500" />
+					) : (
+						<PlusIcon className="size-5 text-brand-500" />
+					)}
 					<h2 className="font-semibold text-gray-900 dark:text-white">
-						添加 OpenAI 兼容渠道
+						{editingId ? "编辑 OpenAI 兼容渠道" : "添加 OpenAI 兼容渠道"}
 					</h2>
 				</div>
 				<form onSubmit={handleSubmit} className="space-y-4">
@@ -351,10 +393,10 @@ export function Channels() {
 					<label className="block space-y-1 text-sm">
 						<span className="font-medium text-gray-700 dark:text-gray-300">上游 API Key</span>
 						<Input
-							required
+							required={!editingId}
 							type="password"
 							value={form.secret}
-							placeholder="不会显示给普通用户"
+							placeholder={editingId ? "留空表示保留当前 Key" : "不会显示给普通用户"}
 							onChange={(e) => setForm({ ...form, secret: e.target.value })}
 						/>
 					</label>
@@ -418,33 +460,32 @@ export function Channels() {
 													onChange={(e) => updateModel(index, { id: e.target.value })}
 												/>
 											</label>
-											<label className="space-y-1 text-xs lg:col-span-2">
-												<span className="font-medium text-gray-700 dark:text-gray-300">规范模型（可选）</span>
-												<select
-													value={model.catalogModelId ?? ""}
-													onChange={(e) => {
-									const value = e.target.value || null;
-									const option = catalogModels?.find((item) => item.id === value);
-									updateModel(index, {
-										catalogModelId: value,
-										catalogName: option?.name ?? null,
-										name: value
-											? option?.name || model.name || model.id
-											: model.name === model.catalogName
-												? model.id
-												: model.name,
-									});
-													}}
-													className="block w-full rounded-lg border border-gray-200 bg-white px-3 py-2 text-sm text-gray-900 focus:border-brand-500 focus:outline-none focus:ring-2 focus:ring-brand-500/20 dark:border-white/10 dark:bg-white/5 dark:text-white"
-												>
-													<option value="">不映射，使用原始 ID</option>
-													{(catalogModels ?? []).map((option) => (
-														<option key={option.id} value={option.id}>
-															{option.name ? `${option.name} · ${option.id}` : option.id}
-														</option>
-													))}
-												</select>
-											</label>
+												<label className="space-y-1 text-xs lg:col-span-2">
+													<span className="font-medium text-gray-700 dark:text-gray-300">规范模型（可选）</span>
+													<ModelCatalogSelect
+														options={catalogModels ?? []}
+														value={model.catalogModelId}
+														onChange={(option) => {
+															const value = option?.id ?? null;
+															updateModel(index, {
+																catalogModelId: value,
+																catalogName: option?.name ?? null,
+																...(option
+																	? {
+																		inputPrice: option.inputPrice,
+																		outputPrice: option.outputPrice,
+																		contextLength: option.contextLength,
+																		modelType: option.modelType,
+																		name: option.name || model.name || model.id,
+																	}
+																	: {
+																		name:
+																			model.name === model.catalogName ? model.id : model.name,
+																	}),
+															});
+														}}
+													/>
+												</label>
 											<label className="space-y-1 text-xs">
 												<span className="font-medium text-gray-700 dark:text-gray-300">输入价 / 1M</span>
 												<Input type="number" min="0" step="0.000001" value={model.inputPrice} onChange={(e) => updateModel(index, { inputPrice: Number(e.target.value) || 0 })} />
@@ -499,8 +540,13 @@ export function Channels() {
 								onChange={(e) => setForm({ ...form, priceMultiplier: e.target.value })}
 							/>
 						</label>
+						{editingId && (
+							<Button type="button" variant="secondary" onClick={resetForm}>
+								取消编辑
+							</Button>
+						)}
 						<Button type="submit" disabled={saving}>
-							{saving ? "保存中…" : "添加渠道"}
+							{saving ? "保存中…" : editingId ? "保存修改" : "添加渠道"}
 						</Button>
 					</div>
 				</form>
@@ -539,6 +585,10 @@ export function Channels() {
 									</div>
 								</div>
 								<div className="flex shrink-0 gap-2">
+									<Button variant="secondary" size="sm" onClick={() => editChannel(channel)}>
+										<PencilSquareIcon className="size-4" />
+										编辑
+									</Button>
 									{channel.hasExtractor && (
 										<Button variant="secondary" size="sm" onClick={() => refreshBalance(channel)} disabled={refreshingId === channel.id}>
 											<ArrowPathIcon className={`size-4 ${refreshingId === channel.id ? "animate-spin" : ""}`} />
