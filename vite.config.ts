@@ -14,13 +14,7 @@ export default defineConfig({
 	],
 	resolve: {
 		alias: {
-			"@wolf": "/src/werewolf",
 			"@": "/src",
-			"next-intl": "/src/werewolf/i18n/next-intl-shim.ts",
-			"next/navigation": "/src/werewolf/shims/next-navigation.ts",
-			"next/link": "/src/werewolf/shims/next-link.tsx",
-			"next/image": "/src/werewolf/shims/next-image.tsx",
-			"next/script": "/src/werewolf/shims/next-script.tsx",
 		},
 	},
 	define: {

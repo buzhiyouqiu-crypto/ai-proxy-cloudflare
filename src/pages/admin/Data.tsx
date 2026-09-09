@@ -15,8 +15,6 @@ const TABLES = [
 	"auto_topup_config",
 	"chat_threads",
 	"chat_messages",
-	"werewolf_sessions",
-	"werewolf_characters",
 ];
 
 function formatCell(value: unknown): string {

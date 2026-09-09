@@ -12,7 +12,6 @@ import {
 	CpuChipIcon,
 	MagnifyingGlassIcon,
 	ServerStackIcon,
-	UserGroupIcon,
 	XMarkIcon,
 } from "@heroicons/react/24/outline";
 import { useEffect, useMemo, useRef, useState } from "react";
@@ -32,7 +31,6 @@ const NAV_LINKS = [
 	{ key: "nav.models", href: "/models", icon: CpuChipIcon },
 	{ key: "nav.providers", href: "/providers", icon: ServerStackIcon },
 	{ key: "nav.chat", href: "/chat", icon: ChatBubbleLeftRightIcon },
-	{ key: "nav.werewolf", href: "/werewolf", icon: UserGroupIcon },
 	{ key: "nav.docs", href: "/docs", icon: BookOpenIcon },
 	{ key: "nav.api", href: "/api-reference", icon: CodeBracketIcon },
 ] as const;
@@ -259,7 +257,7 @@ export function TopNav() {
 						) : (
 							<div className="flex items-center gap-1.5">
 								<Link
-									to="/login"
+									to="/signup"
 									className="hidden items-center px-3 py-1.5 text-xs font-medium text-gray-600 transition-colors hover:text-gray-900 sm:inline-flex dark:text-gray-400 dark:hover:text-white"
 								>
 									{t("landing.cta_signup")}

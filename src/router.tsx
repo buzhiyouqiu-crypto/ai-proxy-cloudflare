@@ -56,8 +56,6 @@ const Chat = lazyWithRetry(() =>
 const DesignSystem = lazyWithRetry(() =>
 	import("./pages/DesignSystem").then((m) => ({ default: m.DesignSystem })),
 );
-const WerewolfGame = lazyWithRetry(() => import("./werewolf/WerewolfEntry"));
-
 // ─── Lazy-loaded admin pages ─────────────────────────────
 
 const Overview = lazyWithRetry(() =>
@@ -277,15 +275,6 @@ export const router = createBrowserRouter([
 							<Chat />
 						</Suspense>
 					</AuthGuard>
-				),
-			},
-
-			{
-				path: "/werewolf",
-				element: (
-					<Suspense fallback={<PageLoader />}>
-						<WerewolfGame />
-					</Suspense>
 				),
 			},
 
