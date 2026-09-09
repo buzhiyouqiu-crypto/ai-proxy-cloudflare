@@ -1,6 +1,7 @@
 import { useCallback, useMemo, useState } from "react";
 import { useTranslation } from "react-i18next";
 import { Link, useNavigate } from "react-router-dom";
+import { useAuth } from "../auth";
 import { CopyButton } from "../components/CopyButton";
 import { ProviderChip } from "../components/ProviderLogo";
 import { RefreshControl } from "../components/RefreshControl";
@@ -15,13 +16,75 @@ import { useAutoRefresh } from "../hooks/useAutoRefresh";
 import { useFetch } from "../hooks/useFetch";
 import type { ModelEntry } from "../types/model";
 import type { ProviderMeta } from "../types/provider";
+import { formatUSD } from "../utils/format";
 import { aggregateProviders } from "../utils/providers";
 
 const fmtMultiplier = (v: number) => `×${v.toFixed(2)}`;
 
+interface AdminChannelSummary {
+	id: string;
+	name: string;
+	quota: number | null;
+	balance: {
+		remaining: number | null;
+		currency?: string;
+		unit?: string;
+		display?: string;
+	} | null;
+	isEnabled: boolean;
+}
+
+function formatChannelBalance(channel: AdminChannelSummary): string {
+	if (channel.balance?.display) return channel.balance.display;
+	if (channel.quota != null) return formatUSD(channel.quota);
+	if (channel.balance?.remaining != null) {
+		const unit = channel.balance.unit || channel.balance.currency || "";
+		return `${channel.balance.remaining}${unit ? ` ${unit}` : ""}`;
+	}
+	return "待同步";
+}
+
+function CustomChannelPicker({
+	channels,
+}: {
+	channels: AdminChannelSummary[];
+}) {
+	const enabledChannels = channels.filter((channel) => channel.isEnabled);
+	const [selectedId, setSelectedId] = useState(enabledChannels[0]?.id ?? "");
+	const selected =
+		enabledChannels.find((channel) => channel.id === selectedId) ??
+		enabledChannels[0];
+
+	if (!selected) return null;
+
+	return (
+		<div
+			className="flex min-w-0 flex-wrap items-center gap-1.5"
+			onClick={(event) => event.stopPropagation()}
+		>
+			<select
+				value={selected.id}
+				onChange={(event) => setSelectedId(event.target.value)}
+				aria-label="选择自定义渠道"
+				className="max-w-48 rounded-md border border-gray-200 bg-white px-2 py-1 text-xs text-gray-700 focus:border-brand-500 focus:outline-none focus:ring-1 focus:ring-brand-500/20 dark:border-white/10 dark:bg-white/5 dark:text-gray-300"
+			>
+				{enabledChannels.map((channel) => (
+					<option key={channel.id} value={channel.id}>
+						{channel.name} · 剩余 {formatChannelBalance(channel)}
+					</option>
+				))}
+			</select>
+			<span className="text-xs text-gray-500 dark:text-gray-400">
+				剩余 {formatChannelBalance(selected)}
+			</span>
+		</div>
+	);
+}
+
 export function Providers() {
 	const { t } = useTranslation();
 	const navigate = useNavigate();
+	const { isAdmin } = useAuth();
 	const {
 		data: models,
 		loading: modelsLoading,
@@ -33,6 +96,10 @@ export function Providers() {
 	const { data: providerSparks, refetch: refetchSparks } = useFetch<
 		Record<string, SparklineData>
 	>("/api/sparklines/provider?sample=900000", { requireAuth: false });
+	const { data: adminChannels } = useFetch<AdminChannelSummary[]>(
+		"/api/admin/channels",
+		{ skip: !isAdmin, staleTime: 0 },
+	);
 
 	const refetch = useCallback(() => {
 		refetchModels();
@@ -54,9 +121,14 @@ export function Providers() {
 		return groups.filter(
 			(g) =>
 				g.provider.id.toLowerCase().includes(q) ||
-				g.provider.name.toLowerCase().includes(q),
+				g.provider.name.toLowerCase().includes(q) ||
+				(g.provider.id === "custom" &&
+					isAdmin &&
+					(adminChannels ?? []).some((channel) =>
+						channel.name.toLowerCase().includes(q),
+					)),
 		);
-	}, [groups, query]);
+	}, [adminChannels, groups, isAdmin, query]);
 
 	const initialLoading =
 		(!models || !providersData) && (modelsLoading || providersLoading);
@@ -165,20 +237,28 @@ export function Providers() {
 										<tr
 											key={g.provider.id}
 											onClick={(e) => {
-												if ((e.target as HTMLElement).closest("a, button"))
+												if ((e.target as HTMLElement).closest("a, button, select"))
 													return;
 												navigate(href);
 											}}
 											className="even:bg-gray-50/50 hover:bg-gray-100/60 dark:even:bg-white/[0.015] dark:hover:bg-white/[0.04] transition-colors cursor-pointer"
 										>
 											<td className="py-2.5 pl-4 pr-2 sm:pl-5 whitespace-nowrap">
-												<Link to={href}>
-													<ProviderChip
-														src={g.provider.logoUrl}
-														name={g.provider.name}
-														size={20}
-													/>
-												</Link>
+												<div className="flex flex-wrap items-center gap-2">
+													<Link to={href}>
+														<ProviderChip
+															src={g.provider.logoUrl}
+															name={g.provider.name}
+															size={20}
+														/>
+													</Link>
+													{g.provider.id === "custom" &&
+														isAdmin &&
+														adminChannels?.filter((channel) => channel.isEnabled)
+															.length ? (
+																<CustomChannelPicker channels={adminChannels} />
+															) : null}
+												</div>
 											</td>
 											<td className="px-2 py-2.5 whitespace-nowrap">
 												<div className="flex items-center gap-1">

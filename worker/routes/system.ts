@@ -41,7 +41,10 @@ systemRouter.get("/pool/stats", async (c) => {
 	});
 });
 
-systemRouter.get("/providers", edgeCache(3600), async (c) => {
+systemRouter.get("/providers", async (c) => {
+	// This response is intentionally uncached: custom channel names must not
+	// remain in an old edge-cache entry after the public response is sanitized.
+	c.header("Cache-Control", "no-store");
 	const includeHidden = c.req.query("all") === "1";
 	const source = includeHidden ? getAllProviders() : getVisibleProviders();
 	const providers = source.map((p) => ({
@@ -62,10 +65,9 @@ systemRouter.get("/providers", edgeCache(3600), async (c) => {
 	if (customNames.length > 0) {
 		providers.push({
 			id: "custom",
-			name:
-				customNames.length === 1
-					? customNames[0]
-					: `自定义渠道（${customNames.join("、")}）`,
+			// Channel names and balances are administrator-only data. Keep the
+			// public provider catalog intentionally generic.
+			name: "自定义渠道",
 			logoUrl: "https://api.iconify.design/mdi:server-network.svg",
 			supportsAutoCredits: false,
 			authType: "api_key",
