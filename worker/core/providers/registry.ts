@@ -168,6 +168,63 @@ function parseMoonshotCredits(
 	return { remaining: data.available_balance, usage: null };
 }
 
+/** MiniMax Token Plan /v1/token_plan/remains — quota is percentage-based. */
+function parseMiniMaxCredits(
+	json: Record<string, unknown>,
+): ProviderCredits | null {
+	const rawRows: unknown[] = Array.isArray(json.model_remains)
+		? json.model_remains
+		: json.data && typeof json.data === "object" &&
+			  Array.isArray((json.data as Record<string, unknown>).model_remains)
+		? ((json.data as Record<string, unknown>).model_remains as unknown[])
+			: [];
+	const rows = rawRows.filter(
+		(row): row is Record<string, unknown> =>
+			!!row && typeof row === "object",
+	);
+	const plan = rows.find((row) => row.model_name === "general") ?? rows[0];
+	if (!plan) return null;
+
+	const interval = Number(plan.current_interval_remaining_percent);
+	const weekly = Number(plan.current_weekly_remaining_percent);
+	const intervalTime = Number(plan.remains_time);
+	const weeklyTime = Number(plan.weekly_remains_time);
+	if (![interval, weekly].some((value) => Number.isFinite(value))) return null;
+
+	const formatDuration = (milliseconds: number): string => {
+		const totalMinutes = Math.max(0, Math.round(milliseconds / 60_000));
+		const days = Math.floor(totalMinutes / (24 * 60));
+		const hours = Math.floor((totalMinutes % (24 * 60)) / 60);
+		const minutes = totalMinutes % 60;
+		if (days > 0) return `${days}d${hours}h`;
+		if (hours > 0) return `${hours}h${minutes}m`;
+		return `${minutes}m`;
+	};
+
+	return {
+		remaining: null,
+		usage: null,
+		unit: "PERCENT",
+		display: [
+			Number.isFinite(interval)
+				? `5小时:${interval}%${Number.isFinite(intervalTime) ? ` ${formatDuration(intervalTime)}` : ""}`
+				: null,
+			Number.isFinite(weekly)
+				? `7天:${weekly}%${Number.isFinite(weeklyTime) ? ` ${formatDuration(weeklyTime)}` : ""}`
+				: null,
+		]
+				.filter((value): value is string => value !== null)
+				.join(" · "),
+		details: {
+			modelName: plan.model_name ?? null,
+			intervalRemainingPercent: Number.isFinite(interval) ? interval : null,
+			weeklyRemainingPercent: Number.isFinite(weekly) ? weekly : null,
+			intervalResetMs: Number.isFinite(intervalTime) ? intervalTime : null,
+			weeklyResetMs: Number.isFinite(weeklyTime) ? weeklyTime : null,
+		},
+	};
+}
+
 // ─── Shared validation helpers ──────────────────────────────
 
 /** Validate API key via a minimal chat completion (for providers where /models is unusable) */
@@ -326,8 +383,10 @@ const PROVIDER_CONFIGS: OpenAICompatibleConfig[] = [
 		currency: "USD",
 		// Token Plan keys are subscription-style quotas rather than a
 		// monetary balance that KeyLoom can safely deduct in USD.
-		supportsAutoCredits: false,
+		supportsAutoCredits: true,
 		isSubscription: true,
+		creditsUrl: "https://www.minimaxi.com/v1/token_plan/remains",
+		parseCredits: parseMiniMaxCredits,
 		staticModels: true,
 		stripModelPrefix: true,
 		systemKeyEnvVar: "MINIMAX_KEY",

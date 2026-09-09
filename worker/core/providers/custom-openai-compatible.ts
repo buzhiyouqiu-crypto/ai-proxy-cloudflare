@@ -96,6 +96,56 @@ function valueAtPath(response: unknown, reference: string): unknown {
 	}, response);
 }
 
+function splitTopLevel(expression: string, separator: string): string[] {
+	const parts: string[] = [];
+	let start = 0;
+	let depth = 0;
+	let quote = "";
+	for (let i = 0; i < expression.length; i++) {
+		const char = expression[i];
+		if (quote) {
+			if (char === quote && expression[i - 1] !== "\\") quote = "";
+			continue;
+		}
+		if (char === "\"" || char === "'" || char === "`") {
+			quote = char;
+			continue;
+		}
+		if ("([{".includes(char)) depth++;
+		else if (")]}`".includes(char)) depth--;
+		if (
+			depth === 0 &&
+			expression.startsWith(separator, i) &&
+			!(separator === "?" && expression[i + 1] === ".")
+		) {
+			parts.push(expression.slice(start, i).trim());
+			start = i + separator.length;
+			i += separator.length - 1;
+		}
+	}
+	parts.push(expression.slice(start).trim());
+	return parts;
+}
+
+function unwrapParentheses(expression: string): string {
+	let value = expression.trim();
+	while (value.startsWith("(") && value.endsWith(")")) {
+		let depth = 0;
+		let balanced = true;
+		for (let i = 0; i < value.length; i++) {
+			if (value[i] === "(") depth++;
+			if (value[i] === ")") depth--;
+			if (depth === 0 && i < value.length - 1) {
+				balanced = false;
+				break;
+			}
+		}
+		if (!balanced) break;
+		value = value.slice(1, -1).trim();
+	}
+	return value;
+}
+
 function evaluateArithmetic(expression: string): number | null {
 	const compact = expression.replace(/\s+/g, "");
 	const tokens = compact.match(/\d+(?:\.\d+)?|[()+\-*/]/g);
@@ -151,23 +201,215 @@ function evaluateArithmetic(expression: string): number | null {
 	return values.length === 1 && Number.isFinite(values[0]) ? values[0] : null;
 }
 
-function extractNumber(code: string, response: unknown): number | null {
-	const match = code.match(/\bremaining\s*:\s*([^,}\n]+)/);
-	if (!match) return null;
-	let expression = match[1]
-		.replace(/\b(Number|parseFloat|parseInt)\s*\(/g, "(")
-		.replace(/\)+\s*$/g, "")
-		.split(/\?\?|\|\|/)[0]
-		.trim();
-	const references = expression.match(/response(?:\?\.|\.)[A-Za-z0-9_$.[\]'`]+/g) ?? [];
-	for (const reference of references) {
-		const value = valueAtPath(response, reference);
-		const numeric = typeof value === "number" ? value : Number(value);
-		if (!Number.isFinite(numeric)) return null;
-		expression = expression.replace(reference, String(numeric));
+/** Resolve the safe subset of expressions used by CC Switch-style extractors. */
+function createExtractorResolver(code: string, response: unknown) {
+	const variables = new Map<string, string>();
+	const variablePattern =
+		/(?:const|let|var)\s+([A-Za-z_$][\w$]*)\s*=\s*([^;]+);?/g;
+	for (const match of code.matchAll(variablePattern)) {
+		variables.set(match[1], match[2].trim());
 	}
-	const direct = Number(expression);
-	return Number.isFinite(direct) ? direct : evaluateArithmetic(expression);
+
+	const resolve = (rawExpression: string, stack = new Set<string>()): unknown => {
+		const expression = unwrapParentheses(rawExpression.trim());
+		if (!expression) return undefined;
+
+		const coalesce = splitTopLevel(expression, "??");
+		if (coalesce.length > 1) {
+			for (const part of coalesce) {
+				const value = resolve(part, stack);
+				if (value !== null && value !== undefined) return value;
+			}
+			return undefined;
+		}
+
+		const ternary = splitTopLevel(expression, "?");
+		if (ternary.length === 2) {
+			const branches = splitTopLevel(ternary[1], ":");
+			if (branches.length === 2) {
+				const comparison = ternary[0].match(
+					/^(.+?)\s*(===|==|!==|!=)\s*(.+)$/,
+				);
+				let truthy = Boolean(resolve(ternary[0], stack));
+				if (comparison) {
+					const left = resolve(comparison[1], stack);
+					const right = resolve(comparison[3], stack);
+					truthy = comparison[2].includes("!") ? left !== right : left === right;
+				}
+				return resolve(branches[truthy ? 0 : 1], stack);
+			}
+		}
+
+		const wrapper = expression.match(
+			/^(Number|parseFloat|parseInt|Math\.round)\s*\(([\s\S]*)\)$/,
+		);
+		if (wrapper) {
+			const value = resolve(wrapper[2], stack);
+			const number = Number(value);
+			if (!Number.isFinite(number)) return undefined;
+			return wrapper[1] === "parseInt" || wrapper[1] === "Math.round"
+				? Math.round(number)
+				: number;
+		}
+
+		if (
+			(expression.startsWith("\"") && expression.endsWith("\"")) ||
+			(expression.startsWith("'") && expression.endsWith("'"))
+		) {
+			return expression.slice(1, -1);
+		}
+		if (expression.startsWith("`") && expression.endsWith("`")) {
+			return expression.slice(1, -1).replace(/\$\{([^}]+)\}/g, (_, part: string) => {
+				const value = resolve(part, stack);
+				return value == null ? "" : String(value);
+			});
+		}
+
+		const additions = splitTopLevel(expression, "+");
+		if (additions.length > 1) {
+			const values = additions.map((part) => resolve(part, stack));
+			if (values.some((value) => value === undefined)) return undefined;
+			if (values.some((value) => typeof value === "string")) {
+				return values.map((value) => String(value)).join("");
+			}
+			return values.reduce<number>((sum, value) => sum + Number(value), 0);
+		}
+
+		const reference = expression.match(
+			/^[A-Za-z_$][\w$]*(?:(?:\?\.)?\.[A-Za-z0-9_$]+|\[\s*(?:\d+|["'][^"']+["'])\s*\])*$/,
+		)?.[0];
+		if (reference) {
+			const root = reference.match(/^[A-Za-z_$][\w$]*/)?.[0];
+			if (root === "response") return valueAtPath(response, reference);
+			const variableExpression = root ? variables.get(root) : undefined;
+			if (!root || !variableExpression || stack.has(root)) return undefined;
+			const value = resolve(variableExpression, new Set([...stack, root]));
+			const suffix = reference.slice(root.length);
+			return suffix ? valueAtPath(value, `response${suffix}`) : value;
+		}
+
+		const direct = Number(expression);
+		if (Number.isFinite(direct)) return direct;
+
+		let arithmetic = expression;
+		const references = expression.match(
+			/[A-Za-z_$][\w$]*(?:(?:\?\.)?\.[A-Za-z0-9_$]+|\[\s*(?:\d+|["'][^"']+["'])\s*\])*/g,
+		) ?? [];
+		for (const referencePart of references) {
+			const value = resolve(referencePart, stack);
+			const number = Number(value);
+			if (!Number.isFinite(number)) return undefined;
+			arithmetic = arithmetic.replace(referencePart, String(number));
+		}
+		return evaluateArithmetic(arithmetic);
+	};
+
+	return resolve;
+}
+
+function extractPropertyExpression(code: string, property: string): string | null {
+	const match = code.match(new RegExp(`\\b${property}\\s*:\\s*`));
+	if (!match || match.index == null) return null;
+	const start = match.index + match[0].length;
+	let depth = 0;
+	let quote = "";
+	for (let i = start; i < code.length; i++) {
+		const char = code[i];
+		if (quote) {
+			if (char === quote && code[i - 1] !== "\\") quote = "";
+			continue;
+		}
+		if (char === "\"" || char === "'" || char === "`") {
+			quote = char;
+			continue;
+		}
+		if ("([{".includes(char)) depth++;
+		else if (")]}".includes(char)) {
+			if (depth === 0) return code.slice(start, i).trim();
+			depth--;
+		}
+		if (depth === 0 && char === ",") return code.slice(start, i).trim();
+	}
+	return code.slice(start).trim();
+}
+
+function extractNumber(code: string, response: unknown): number | null {
+	const expression = extractPropertyExpression(code, "remaining");
+	if (!expression) return null;
+	const value = createExtractorResolver(code, response)(expression);
+	const number = typeof value === "number" ? value : Number(value);
+	return Number.isFinite(number) ? number : null;
+}
+
+function extractText(
+	code: string,
+	response: unknown,
+	property: string,
+): string | null {
+	const expression = extractPropertyExpression(code, property);
+	if (!expression) return null;
+	const value = createExtractorResolver(code, response)(expression);
+	return value == null ? null : String(value);
+}
+
+function formatDuration(milliseconds: number): string {
+	const totalMinutes = Math.max(0, Math.round(milliseconds / 60_000));
+	const days = Math.floor(totalMinutes / (24 * 60));
+	const hours = Math.floor((totalMinutes % (24 * 60)) / 60);
+	const minutes = totalMinutes % 60;
+	if (days > 0) return `${days}d${hours}h`;
+	if (hours > 0) return `${hours}h${minutes}m`;
+	return `${minutes}m`;
+}
+
+/** MiniMax Token Plan /v1/token_plan/remains response. */
+function parseMiniMaxTokenPlanCredits(response: unknown): ProviderCredits | null {
+	if (!response || typeof response !== "object") return null;
+	const root = response as Record<string, unknown>;
+	const data = root.data as Record<string, unknown> | undefined;
+	const rawRows = Array.isArray(root.model_remains)
+		? root.model_remains
+		: Array.isArray(data?.model_remains)
+			? data.model_remains
+			: [];
+	const plans = rawRows.filter(
+		(row): row is Record<string, unknown> =>
+			!!row && typeof row === "object",
+	);
+	const plan =
+		plans.find((row) => row.model_name === "general") ?? plans[0];
+	if (!plan) return null;
+
+	const interval = Number(plan.current_interval_remaining_percent);
+	const weekly = Number(plan.current_weekly_remaining_percent);
+	const intervalTime = Number(plan.remains_time);
+	const weeklyTime = Number(plan.weekly_remains_time);
+	if (![interval, weekly].some((value) => Number.isFinite(value))) return null;
+
+	const display = [
+		Number.isFinite(interval)
+			? `5小时:${interval}%${Number.isFinite(intervalTime) ? ` ${formatDuration(intervalTime)}` : ""}`
+			: null,
+		Number.isFinite(weekly)
+			? `7天:${weekly}%${Number.isFinite(weeklyTime) ? ` ${formatDuration(weeklyTime)}` : ""}`
+			: null,
+	]
+		.filter((value): value is string => value !== null)
+		.join(" · ");
+
+	return {
+		remaining: null,
+		usage: null,
+		unit: "PERCENT",
+		display,
+		details: {
+			modelName: plan.model_name ?? null,
+			intervalRemainingPercent: Number.isFinite(interval) ? interval : null,
+			weeklyRemainingPercent: Number.isFinite(weekly) ? weekly : null,
+			intervalResetMs: Number.isFinite(intervalTime) ? intervalTime : null,
+			weeklyResetMs: Number.isFinite(weeklyTime) ? weeklyTime : null,
+		},
+	};
 }
 
 async function fetchCreditsWithExtractor(
@@ -189,13 +431,25 @@ async function fetchCreditsWithExtractor(
 		} catch {
 			// Keep the text wrapper for extractors that use response.text.
 		}
+		const miniMaxCredits = parseMiniMaxTokenPlanCredits(body);
+		if (miniMaxCredits) return miniMaxCredits;
 		const remaining = extractNumber(code, body);
 		if (remaining == null) return null;
 		const unit = code.match(/\bunit\s*:\s*["'`]([^"'`]+)["'`]/)?.[1] ?? "USD";
+		const normalizedUnit = unit.toUpperCase();
+		const display =
+			extractText(code, body, "display") ??
+			extractText(code, body, "extra") ??
+			(normalizedUnit.includes("%") ? `${remaining}%` : undefined);
 		return {
 			remaining,
 			usage: null,
-			currency: unit.toUpperCase() === "CNY" ? "CNY" : "USD",
+			currency:
+				normalizedUnit === "CNY" || normalizedUnit === "USD"
+					? (normalizedUnit as "CNY" | "USD")
+					: undefined,
+			unit,
+			display,
 		};
 	} catch {
 		return null;

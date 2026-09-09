@@ -10,6 +10,10 @@
 
 import { log } from "../../shared/logger";
 import type { Env } from "../../shared/types";
+import {
+	isMonetaryBalance,
+	writeBalanceSnapshot,
+} from "../../shared/provider-balance";
 import { CatalogDao } from "../db/catalog-dao";
 import { CredentialsDao } from "../db/credentials-dao";
 import type { ParsedModel } from "../providers/interface";
@@ -269,9 +273,13 @@ export async function syncAutoCredits(
 	cnyUsdRate = 7,
 ): Promise<void> {
 	const dao = new CredentialsDao(db, encryptionKey);
-	const autos = (await dao.getGlobal()).filter(
-		(c) => c.quota_source === "auto",
-	);
+	const autos = (await dao.getGlobal()).filter((credential) => {
+		if (credential.quota_source === "auto") return true;
+		const provider = getProvider(credential.provider_id);
+		return Boolean(
+			provider?.info.isSubscription && provider.info.supportsAutoCredits,
+		);
+	});
 
 	const results = await Promise.allSettled(
 		autos.map(async (credential) => {
@@ -281,7 +289,17 @@ export async function syncAutoCredits(
 
 			const secret = await dao.decryptSecret(credential);
 			const credits = await provider.fetchCredits(secret);
-			if (credits?.remaining == null) return;
+			if (!credits) return;
+
+			await dao.updateMetadata(
+				credential.id,
+				writeBalanceSnapshot(credential.metadata, credits),
+			);
+			if (
+				credits.remaining == null ||
+				!isMonetaryBalance(credits, provider.info.currency)
+			)
+				return;
 
 			const currency = credits.currency ?? provider.info.currency;
 			const usd =

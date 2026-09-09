@@ -16,6 +16,11 @@ import {
 import { purgePublicCaches } from "../../shared/cache";
 import { briefHint, decrypt, mask } from "../../shared/crypto";
 import { BadRequestError } from "../../shared/errors";
+import {
+	isMonetaryBalance,
+	readBalanceSnapshot,
+	writeBalanceSnapshot,
+} from "../../shared/provider-balance";
 import type { AppEnv } from "../../shared/types";
 import type { DbCredential } from "../../core/db/schema";
 import { parse } from "../../shared/validate";
@@ -53,25 +58,68 @@ const DiscoverModelsInput = z.object({
 	outputPrice: z.number().min(0).max(1_000_000).default(0),
 });
 
+interface ResolvedCustomModel {
+	channelId: string;
+	channelName: string;
+	model: CustomChannelModel;
+	catalogModelId: string;
+	catalogName: string | null;
+}
+
+async function resolveCanonicalModel(
+	db: D1Database,
+	rawModelId: string,
+): Promise<{ modelId: string; name: string | null }> {
+	const normalized = rawModelId.trim().toLowerCase();
+	const exact = await db
+		.prepare(
+			`SELECT model_id, name FROM model_catalog
+			 WHERE lower(model_id) = ? AND is_active = 1
+			 ORDER BY CASE WHEN provider_id = 'openai' THEN 0 ELSE 1 END, input_price ASC
+			 LIMIT 1`,
+		)
+		.bind(normalized)
+		.first<{ model_id: string; name: string | null }>();
+	if (exact) return { modelId: exact.model_id, name: exact.name };
+
+	if (!normalized.includes("/")) {
+		const suffix = await db
+			.prepare(
+				`SELECT model_id, name FROM model_catalog
+				 WHERE lower(model_id) LIKE ? AND is_active = 1
+				 ORDER BY CASE WHEN provider_id = 'openai' THEN 0 ELSE 1 END, input_price ASC
+				 LIMIT 1`,
+			)
+			.bind(`%/${normalized}`)
+			.first<{ model_id: string; name: string | null }>();
+		if (suffix) return { modelId: suffix.model_id, name: suffix.name };
+	}
+
+	return { modelId: normalized, name: null };
+}
+
 function customCatalogEntries(
-	models: CustomChannelModel[],
+	models: ResolvedCustomModel[],
 ): Omit<
 	import("../../core/db/schema").DbModelCatalog,
 	"refreshed_at" | "is_active"
 >[] {
-	return models.map((model) => ({
-		id: `custom:${model.id}`,
+	return models.map(({ channelId, channelName, model, catalogModelId, catalogName }) => ({
+		id: `custom:${channelId}:${catalogModelId}`,
 		provider_id: "custom",
-		model_id: model.id,
-		name: model.name || model.id,
+		model_id: catalogModelId,
+		name: catalogName || model.name || catalogModelId,
 		model_type: model.modelType ?? "chat",
 		input_price: model.inputPrice,
 		output_price: model.outputPrice,
 		context_length: model.contextLength ?? null,
 		input_modalities: '["text"]',
 		output_modalities: '["text"]',
-		upstream_model_id: null,
+		upstream_model_id: model.id,
 		metadata: JSON.stringify({
+			channelId,
+			channelName,
+			canonicalModelId: catalogModelId,
 			pricing: {
 				prompt: String(model.inputPrice / 1_000_000),
 				completion: String(model.outputPrice / 1_000_000),
@@ -84,17 +132,22 @@ function customCatalogEntries(
 async function rebuildCustomCatalog(db: D1Database): Promise<void> {
 	const rows = await db
 		.prepare(
-			"SELECT metadata FROM upstream_credentials WHERE provider_id = 'custom' AND is_enabled = 1",
+			"SELECT id, metadata FROM upstream_credentials WHERE provider_id = 'custom' AND is_enabled = 1",
 		)
-		.all<{ metadata: string | null }>();
-	const models = new Map<string, CustomChannelModel>();
+		.all<{ id: string; metadata: string | null }>();
+	const models: ResolvedCustomModel[] = [];
 	for (const row of rows.results ?? []) {
 		const channel = parseCustomChannelMetadata(row.metadata);
+		if (!channel) continue;
 		for (const model of channel?.models ?? []) {
-			const current = models.get(model.id);
-			if (!current || model.inputPrice < current.inputPrice) {
-				models.set(model.id, model);
-			}
+			const canonical = await resolveCanonicalModel(db, model.id);
+			models.push({
+				channelId: row.id,
+				channelName: channel.name,
+				model,
+				catalogModelId: canonical.modelId,
+				catalogName: canonical.name,
+			});
 		}
 	}
 
@@ -270,6 +323,7 @@ admin.get("/channels", async (c) => {
 					hasExtractor: Boolean(channel?.extractorCode?.trim()),
 					secretHint: row.secret_hint,
 					quota: row.quota,
+					balance: readBalanceSnapshot(row.metadata),
 					isEnabled: row.is_enabled === 1,
 					priceMultiplier: row.price_multiplier,
 					health: row.health_status,
@@ -400,13 +454,27 @@ admin.post("/channels/:id/refresh-balance", async (c) => {
 	const credits = await provider.fetchCredits(
 		await new CredentialsDao(c.env.DB, c.env.ENCRYPTION_KEY).decryptSecret(row),
 	);
-	if (!credits || credits.remaining == null) {
+	if (!credits) {
 		throw new BadRequestError("The extractor did not return a balance", "balance_extract_failed");
 	}
-	const rate = Number.parseFloat(c.env.CNY_USD_RATE || "7");
-	const quota = credits.currency === "CNY" ? credits.remaining / rate : credits.remaining;
-	await new CredentialsDao(c.env.DB, c.env.ENCRYPTION_KEY).updateQuota(id, quota, "auto");
-	return c.json({ data: { quota, remaining: credits.remaining, currency: credits.currency ?? "USD" } });
+	const dao = new CredentialsDao(c.env.DB, c.env.ENCRYPTION_KEY);
+	await dao.updateMetadata(id, writeBalanceSnapshot(row.metadata, credits));
+	let quota = row.quota;
+	if (credits.remaining != null && isMonetaryBalance(credits, "USD")) {
+		const rate = Number.parseFloat(c.env.CNY_USD_RATE || "7");
+		quota = credits.currency === "CNY" ? credits.remaining / rate : credits.remaining;
+		await dao.updateQuota(id, quota, "auto");
+	}
+	return c.json({
+		data: {
+			quota,
+			remaining: credits.remaining,
+			currency: credits.currency,
+			unit: credits.unit,
+			display: credits.display,
+			details: credits.details,
+		},
+	});
 });
 
 admin.patch("/channels/:id", async (c) => {

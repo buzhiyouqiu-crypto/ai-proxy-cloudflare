@@ -2,6 +2,7 @@ import { Hono } from "hono";
 import { CandleDao, type CandleDimension } from "../core/db/candle-dao";
 import { CredentialsDao } from "../core/db/credentials-dao";
 import { LogsDao } from "../core/db/logs-dao";
+import { parseCustomChannelMetadata } from "../core/providers/custom-openai-compatible";
 import {
 	getAllProviders,
 	getVisibleProviders,
@@ -52,13 +53,19 @@ systemRouter.get("/providers", edgeCache(3600), async (c) => {
 		isSubscription: p.info.isSubscription ?? false,
 		credentialGuide: p.info.credentialGuide ?? null,
 	}));
-	const customChannel = await c.env.DB.prepare(
-		"SELECT 1 FROM upstream_credentials WHERE provider_id = 'custom' AND is_enabled = 1 LIMIT 1",
-	).first();
-	if (customChannel) {
+	const customChannels = await c.env.DB.prepare(
+		"SELECT metadata FROM upstream_credentials WHERE provider_id = 'custom' AND is_enabled = 1",
+	).all<{ metadata: string | null }>();
+	const customNames = (customChannels.results ?? [])
+		.map((row) => parseCustomChannelMetadata(row.metadata)?.name)
+		.filter((name): name is string => Boolean(name));
+	if (customNames.length > 0) {
 		providers.push({
 			id: "custom",
-			name: "自定义 OpenAI 兼容渠道",
+			name:
+				customNames.length === 1
+					? customNames[0]
+					: `自定义渠道（${customNames.join("、")}）`,
 			logoUrl: "https://api.iconify.design/mdi:server-network.svg",
 			supportsAutoCredits: false,
 			authType: "api_key",

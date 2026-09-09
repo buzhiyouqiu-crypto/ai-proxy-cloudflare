@@ -24,6 +24,22 @@ export interface ProviderCredits {
 	remaining: number | null;
 	usage: number | null;
 	currency?: "USD" | "CNY";
+	/** Non-monetary units such as MiniMax Token Plan percentages. */
+	unit?: string;
+	/** Human-readable provider-specific quota text. */
+	display?: string;
+	/** Small, provider-specific details that can be rendered or inspected later. */
+	details?: Record<string, unknown>;
+}
+
+export interface ProviderBalanceSnapshot {
+	remaining: number | null;
+	usage: number | null;
+	currency?: "USD" | "CNY";
+	unit?: string;
+	display?: string;
+	details?: Record<string, unknown>;
+	updatedAt: number;
 }
 
 export type ParsedModel = Omit<DbModelCatalog, "refreshed_at" | "is_active">;

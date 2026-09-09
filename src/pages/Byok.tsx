@@ -42,6 +42,14 @@ interface CredentialInfo {
 	health: HealthStatus;
 	isEnabled: boolean;
 	priceMultiplier: number;
+	balance: {
+		remaining: number | null;
+		usage: number | null;
+		currency?: "USD" | "CNY";
+		unit?: string;
+		display?: string;
+		updatedAt: number;
+	} | null;
 	addedAt: number;
 	earnings: number;
 }
@@ -270,10 +278,16 @@ export function Byok() {
 		providers.find((p) => p.id === cred.provider_id)?.isSubscription ?? false;
 
 	const formatQuota = (cred: CredentialInfo) => {
+		if (cred.balance?.display) return cred.balance.display;
 		if (isSubscription(cred)) return t("credentials.subscription");
 		if (cred.quota == null) return t("credentials.no_quota");
 		return formatUSD(cred.quota);
 	};
+
+	const canRefreshQuota = (cred: CredentialInfo) =>
+		cred.quotaSource === "auto" ||
+		providers.find((p) => p.id === cred.provider_id)?.supportsAutoCredits ||
+		isSubscription(cred);
 
 	return (
 		<div>
@@ -703,7 +717,7 @@ export function Byok() {
 															}`}
 														>
 															{formatQuota(cred)}
-															{cred.quotaSource === "auto" && (
+															{canRefreshQuota(cred) && (
 																<button
 																	type="button"
 																	disabled={refreshingQuotaId === cred.id}

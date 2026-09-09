@@ -26,6 +26,14 @@ interface Channel {
 	hasExtractor: boolean;
 	secretHint: string;
 	quota: number | null;
+	balance: {
+		remaining: number | null;
+		usage: number | null;
+		currency?: "USD" | "CNY";
+		unit?: string;
+		display?: string;
+		updatedAt: number;
+	} | null;
 	isEnabled: boolean;
 	priceMultiplier: number;
 	health: string;
@@ -315,7 +323,7 @@ export function Channels() {
 							className="block w-full rounded-lg border border-gray-200 bg-white px-3.5 py-2 font-mono text-sm text-gray-900 placeholder:text-gray-400 focus:border-brand-500 focus:outline-none focus:ring-2 focus:ring-brand-500/20 dark:border-white/10 dark:bg-white/5 dark:text-white"
 						/>
 						<span className="text-xs text-gray-500">
-							价格单位是 USD / 1M tokens；模型 ID 会原样转发给上游。
+							价格单位是 USD / 1M tokens；如果模型 ID 能匹配已有目录（例如 gpt-5.6-luna），会统一到规范 ID，原始 ID 仍会转发给上游。
 						</span>
 						</label>
 						<Button type="button" variant="secondary" onClick={discoverModels} disabled={discovering}>
@@ -332,7 +340,7 @@ export function Channels() {
 							className="block w-full rounded-lg border border-gray-200 bg-white px-3.5 py-2 font-mono text-xs text-gray-900 placeholder:text-gray-400 focus:border-brand-500 focus:outline-none focus:ring-2 focus:ring-brand-500/20 dark:border-white/10 dark:bg-white/5 dark:text-white"
 						/>
 						<span className="text-xs text-gray-500">
-							支持 request.url/method/headers，以及 response.data.balance 这类字段路径和简单加减乘除；用 {"{{API_KEY}}"} 代表上游 Key。
+							支持 request.url/method/headers、response 字段路径、变量和简单加减乘除；用 {"{{API_KEY}}"} 代表上游 Key。返回 unit 为 USD/CNY 时按金额处理，返回 display/extra 或百分比 unit 时按配额文本展示。
 						</span>
 					</label>
 
@@ -380,7 +388,11 @@ export function Channels() {
 										{channel.models.length} 个模型 · Key {channel.secretHint} · ×{channel.priceMultiplier}
 									</div>
 									<div className="mt-1 text-xs text-gray-500">
-										{channel.hasExtractor ? `自动余额：${channel.quota == null ? "待同步" : `$${channel.quota.toFixed(4)}`}` : "手动价格/无余额同步"}
+										{channel.hasExtractor
+											? channel.balance?.display
+												? `剩余配额：${channel.balance.display}`
+												: `自动余额：${channel.quota == null ? "待同步" : `$${channel.quota.toFixed(4)}`}`
+											: "手动价格/无余额同步"}
 									</div>
 								</div>
 								<div className="flex shrink-0 gap-2">

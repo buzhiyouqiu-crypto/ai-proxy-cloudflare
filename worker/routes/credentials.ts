@@ -3,6 +3,11 @@ import { z } from "zod";
 import { CredentialsDao } from "../core/db/credentials-dao";
 import { LogsDao } from "../core/db/logs-dao";
 import { getProvider } from "../core/providers/registry";
+import {
+	isMonetaryBalance,
+	readBalanceSnapshot,
+	writeBalanceSnapshot,
+} from "../shared/provider-balance";
 import { sha256 } from "../shared/crypto";
 import { ApiError, BadRequestError } from "../shared/errors";
 import type { AppEnv } from "../shared/types";
@@ -166,6 +171,7 @@ credentialsRouter.get("/", async (c) => {
 			health: cred.health_status,
 			isEnabled: cred.is_enabled === 1,
 			priceMultiplier: cred.price_multiplier,
+			balance: readBalanceSnapshot(cred.metadata),
 			addedAt: cred.added_at,
 			earnings: earnings.get(cred.id) ?? 0,
 		})),
@@ -285,26 +291,39 @@ credentialsRouter.get("/:id/quota", async (c) => {
 		quotaSource: credential.quota_source,
 	};
 
-	if (credential.quota_source === "auto") {
-		const provider = getProvider(credential.provider_id);
-		if (provider) {
-			const secret = await dao.decryptSecret(credential);
-			const cnyRate = Number.parseFloat(c.env.CNY_USD_RATE || "7");
-			const upstream = await provider.fetchCredits(secret);
-			if (upstream?.remaining != null) {
-				const newQuota = toQuota(
-					upstream.remaining,
-					provider.info.currency,
-					cnyRate,
-				);
+	const provider = getProvider(credential.provider_id);
+	const canRefresh =
+		!!provider &&
+		(credential.quota_source === "auto" ||
+			provider.info.supportsAutoCredits ||
+			provider.info.isSubscription);
+	if (canRefresh && provider) {
+		const secret = await dao.decryptSecret(credential);
+		const cnyRate = Number.parseFloat(c.env.CNY_USD_RATE || "7");
+		const upstream = await provider.fetchCredits(secret);
+		if (upstream) {
+			await dao.updateMetadata(
+				id,
+				writeBalanceSnapshot(credential.metadata, upstream),
+			);
+			const currency = upstream.currency ?? provider.info.currency;
+			if (
+				upstream.remaining != null &&
+				isMonetaryBalance(upstream, provider.info.currency)
+			) {
+				const newQuota = toQuota(upstream.remaining, currency, cnyRate);
 				await dao.updateQuota(id, newQuota, "auto");
 				result.quota = newQuota;
-				result.upstream = {
-					remaining: upstream.remaining,
-					usage: upstream.usage,
-					currency: provider.info.currency,
-				};
 			}
+			result.balance = {
+				remaining: upstream.remaining,
+				usage: upstream.usage,
+				currency: upstream.currency,
+				unit: upstream.unit,
+				display: upstream.display,
+				details: upstream.details,
+			};
+			result.upstream = result.balance;
 		}
 	}
 
