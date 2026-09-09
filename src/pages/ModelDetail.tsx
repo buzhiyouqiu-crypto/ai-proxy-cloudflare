@@ -1,0 +1,339 @@
+import {
+	ChevronDownIcon,
+	ClockIcon,
+	CubeTransparentIcon,
+	ServerStackIcon,
+} from "@heroicons/react/24/outline";
+import { ChatBubbleLeftRightIcon } from "@heroicons/react/24/solid";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { useTranslation } from "react-i18next";
+import { Link, useParams } from "react-router-dom";
+import type { Modality } from "../../worker/core/db/schema";
+import { CodeSamples, detectCodeVariant } from "../components/CodeSamples";
+import { CopyButton } from "../components/CopyButton";
+import { MODALITY_ICON, MODALITY_ORDER } from "../components/Modalities";
+import { OrgLogo } from "../components/OrgLogo";
+import { PriceChart } from "../components/PriceChart";
+import { ProviderChip } from "../components/ProviderLogo";
+import { Badge, Breadcrumb, buttonClass, DualPrice } from "../components/ui";
+import { useFetch } from "../hooks/useFetch";
+import type { ModelEntry } from "../types/model";
+import type { ProviderMeta } from "../types/provider";
+import { TOKENS } from "../utils/colors";
+import { formatContext, formatRelativeTime } from "../utils/format";
+import { aggregateModels } from "../utils/models";
+
+export function ModelDetail() {
+	const { org, model } = useParams<{ org: string; model: string }>();
+	const { t, i18n } = useTranslation();
+	const modelId = `${org}/${model}`;
+
+	const { data: rawModels, loading } = useFetch<ModelEntry[]>("/api/models", {
+		requireAuth: false,
+	});
+	const { data: providersData } = useFetch<ProviderMeta[]>("/api/providers", {
+		requireAuth: false,
+	});
+
+	const group = useMemo(() => {
+		if (!rawModels) return null;
+		return aggregateModels(rawModels).find((g) => g.id === modelId) ?? null;
+	}, [rawModels, modelId]);
+
+	const providerMap = useMemo(
+		() => new Map((providersData ?? []).map((p) => [p.id, p])),
+		[providersData],
+	);
+
+	useEffect(() => {
+		if (group) document.title = `${group.displayName} — Keyaos`;
+		return () => {
+			document.title = "Keyaos";
+		};
+	}, [group]);
+
+	if (loading) {
+		return (
+			<div className="animate-pulse space-y-8">
+				<div>
+					<div className="h-8 w-full max-w-64 rounded bg-gray-200 dark:bg-white/10" />
+					<div className="mt-2 h-4 w-48 rounded bg-gray-100 dark:bg-white/5" />
+					<div className="mt-3 flex gap-3">
+						<div className="h-5 w-24 rounded bg-gray-100 dark:bg-white/5" />
+						<div className="h-5 w-20 rounded bg-gray-100 dark:bg-white/5" />
+						<div className="h-5 w-28 rounded bg-gray-100 dark:bg-white/5" />
+					</div>
+				</div>
+				<div className="h-16 rounded-xl bg-gray-100 dark:bg-white/5" />
+				<div className="h-64 rounded-xl border border-gray-200 bg-white dark:border-white/10 dark:bg-white/5" />
+				<div className="h-48 rounded-xl border border-gray-200 bg-white dark:border-white/10 dark:bg-white/5" />
+			</div>
+		);
+	}
+
+	if (!group) {
+		return (
+			<div className="py-20 text-center">
+				<p className="text-lg font-medium text-gray-900 dark:text-white">
+					{t("models.not_found", "Model not found")}
+				</p>
+				<p className="mt-2 text-sm text-gray-500 dark:text-gray-400">
+					<code className="font-mono">{modelId}</code>
+				</p>
+				<Link
+					to="/models"
+					className="mt-4 inline-block text-sm font-medium text-brand-600 hover:text-brand-700 dark:text-brand-400 dark:hover:text-brand-300"
+				>
+					&larr; {t("models.back_to_list", "Back to models")}
+				</Link>
+			</div>
+		);
+	}
+
+	const maxCtx = Math.max(...group.providers.map((p) => p.contextLength));
+	const codeVariant = detectCodeVariant(
+		group.outputModalities,
+		group.supportedParameters,
+		group.type,
+	);
+
+	return (
+		<div className="space-y-6">
+			{/* Breadcrumb */}
+			<Breadcrumb
+				items={[
+					{ label: t("nav.models", "Models"), to: "/models" },
+					{ label: group.displayName },
+				]}
+			/>
+
+			{/* Header */}
+			<div className="flex flex-col gap-4 sm:flex-row sm:items-start sm:justify-between">
+				<div className="min-w-0">
+					<h1 className="flex items-center gap-2 text-2xl font-bold text-gray-900 dark:text-white">
+						<OrgLogo modelId={group.id} size={24} />
+						{group.displayName}
+						{group.type === "embedding" && (
+							<Badge variant="brand">Embedding</Badge>
+						)}
+					</h1>
+					<div className="mt-1.5 flex items-center gap-2">
+						<code className="text-sm font-mono text-gray-500 dark:text-gray-400">
+							{group.id}
+						</code>
+						<CopyButton text={group.id} />
+					</div>
+					<div className="mt-3 flex flex-wrap items-center gap-2">
+						{group.createdAt > 0 && (
+							<span
+								className={`inline-flex items-center gap-1 rounded-full px-2.5 py-0.5 text-xs font-medium ${TOKENS.sky.soft}`}
+							>
+								<ClockIcon className="size-3.5" />
+								{formatRelativeTime(group.createdAt, i18n.language)}
+							</span>
+						)}
+						{maxCtx > 0 && (
+							<span
+								className={`inline-flex items-center gap-1 rounded-full px-2.5 py-0.5 text-xs font-medium ${TOKENS.amber.soft}`}
+							>
+								<CubeTransparentIcon className="size-3.5" />
+								{formatContext(maxCtx)} context
+							</span>
+						)}
+						<span
+							className={`inline-flex items-center gap-1 rounded-full px-2.5 py-0.5 text-xs font-medium ${TOKENS.teal.soft}`}
+						>
+							<ServerStackIcon className="size-3.5" />
+							{group.providers.length}{" "}
+							{group.providers.length === 1 ? "provider" : "providers"}
+						</span>
+						<ModalityPill
+							input={group.inputModalities}
+							output={group.outputModalities}
+						/>
+					</div>
+				</div>
+				{group.type !== "embedding" && (
+					<Link
+						to={`/chat?model=${encodeURIComponent(group.id)}`}
+						className={buttonClass("primary", "lg", "shrink-0")}
+					>
+						<ChatBubbleLeftRightIcon className="size-5" />
+						Chat
+					</Link>
+				)}
+			</div>
+
+			{/* Collapsible Description */}
+			{group.description && <DescriptionSection text={group.description} />}
+
+			{/* Price Chart */}
+			<PriceChart dimension="model" value={group.id} />
+
+			{/* Providers Table */}
+			<div className="overflow-x-auto rounded-xl border border-gray-200 dark:border-white/10">
+				<table className="min-w-full divide-y divide-gray-100 dark:divide-white/5">
+					<thead>
+						<tr className="text-left text-xs font-medium text-gray-400 dark:text-gray-500 whitespace-nowrap">
+							<th className="py-2.5 pl-4 pr-2 sm:pl-5">
+								{t("models.provider", "Provider")}
+							</th>
+							<th className="px-2 py-2.5">ID</th>
+							<th className="px-2 py-2.5 text-right">
+								{t("models.input_price", "Input /1M")}
+							</th>
+							<th className="px-2 py-2.5 text-right">
+								{t("models.output_price", "Output /1M")}
+							</th>
+							<th className="py-2.5 pl-2 pr-4 text-right sm:pr-5">
+								{t("models.context", "Context")}
+							</th>
+						</tr>
+					</thead>
+					<tbody className="divide-y divide-gray-50 dark:divide-white/[0.03]">
+						{group.providers.map((p, i) => {
+							const meta = providerMap.get(p.provider_id);
+							return (
+								<tr
+									key={p.provider_id}
+									className={
+										i === 0
+											? "bg-brand-50/50 dark:bg-brand-500/[0.04]"
+											: "even:bg-gray-50/50 dark:even:bg-white/[0.015]"
+									}
+								>
+									<td className="py-2.5 pl-4 pr-2 sm:pl-5 whitespace-nowrap">
+										<span className="inline-flex items-center gap-1.5">
+											<Link to={`/providers/${p.provider_id}`}>
+												<ProviderChip
+													src={meta?.logoUrl ?? ""}
+													name={meta?.name ?? p.provider_id}
+													size={16}
+												/>
+											</Link>
+											{i === 0 && (
+												<Badge variant="brand">
+													{t("models.best_price", "Best")}
+												</Badge>
+											)}
+										</span>
+									</td>
+									<td className="px-2 py-2.5 whitespace-nowrap">
+										<div className="flex items-center gap-1">
+											<code className="text-xs font-mono text-gray-500 dark:text-gray-400">
+												{p.provider_id}
+											</code>
+											<CopyButton text={p.provider_id} />
+										</div>
+									</td>
+									<td className="px-2 py-2.5 text-sm font-mono text-right text-gray-600 dark:text-gray-400">
+										<DualPrice
+											original={p.inputPrice}
+											platform={p.platformInputPrice}
+										/>
+									</td>
+									<td className="px-2 py-2.5 text-sm font-mono text-right text-gray-600 dark:text-gray-400">
+										<DualPrice
+											original={p.outputPrice}
+											platform={p.platformOutputPrice}
+										/>
+									</td>
+									<td className="py-2.5 pl-2 pr-4 text-sm font-mono text-right text-gray-600 dark:text-gray-400 sm:pr-5">
+										{formatContext(p.contextLength)}
+									</td>
+								</tr>
+							);
+						})}
+					</tbody>
+				</table>
+			</div>
+
+			{/* API Integration */}
+			<CodeSamples modelId={group.id} variant={codeVariant} />
+		</div>
+	);
+}
+
+// ─── Modality pills (detail page only) ───────────────────
+
+function ModalityPill({
+	input,
+	output,
+}: {
+	input: Modality[];
+	output: Modality[];
+}) {
+	const sorted = (mods: Modality[]) =>
+		MODALITY_ORDER.filter((m) => mods.includes(m));
+
+	const renderIcons = (mods: Modality[]) =>
+		sorted(mods).map((m) => {
+			const Ico = MODALITY_ICON[m];
+			return <Ico key={m} className="size-3.5" />;
+		});
+
+	return (
+		<span
+			className={`inline-flex items-center gap-1.5 rounded-full px-2.5 py-0.5 text-xs font-medium ${TOKENS.rose.soft}`}
+		>
+			<span className="inline-flex items-center gap-0.5">
+				{renderIcons(input)}
+			</span>
+			<span className="opacity-40 select-none">→</span>
+			<span className="inline-flex items-center gap-0.5">
+				{renderIcons(output)}
+			</span>
+		</span>
+	);
+}
+
+// ─── Collapsible description ─────────────────────────────
+
+const COLLAPSED_HEIGHT = 72;
+
+function DescriptionSection({ text }: { text: string }) {
+	const [expanded, setExpanded] = useState(false);
+	const innerRef = useRef<HTMLParagraphElement>(null);
+	const [naturalHeight, setNaturalHeight] = useState(COLLAPSED_HEIGHT);
+
+	const measure = useCallback(() => {
+		if (innerRef.current) {
+			setNaturalHeight(innerRef.current.scrollHeight);
+		}
+	}, []);
+
+	useEffect(measure, [measure]);
+
+	const needsCollapse = naturalHeight > COLLAPSED_HEIGHT;
+
+	return (
+		<button
+			type="button"
+			onClick={() => needsCollapse && setExpanded((v) => !v)}
+			aria-expanded={expanded}
+			className={`relative flex w-full gap-4 text-left ${needsCollapse ? "cursor-pointer" : "cursor-default"}`}
+		>
+			<div
+				className="min-w-0 flex-1 overflow-hidden transition-[max-height] duration-300 ease-out"
+				style={{
+					maxHeight: expanded ? naturalHeight : COLLAPSED_HEIGHT,
+				}}
+			>
+				<p
+					ref={innerRef}
+					className="text-sm leading-relaxed text-gray-600 dark:text-gray-400 whitespace-pre-line"
+				>
+					{text}
+				</p>
+			</div>
+			{needsCollapse && !expanded && (
+				<div className="pointer-events-none absolute inset-x-0 bottom-0 h-10 bg-gradient-to-t from-white dark:from-gray-900" />
+			)}
+			{needsCollapse && (
+				<ChevronDownIcon
+					className={`mt-1 size-4 shrink-0 text-gray-400 transition-transform duration-200 ${expanded ? "rotate-180" : ""}`}
+				/>
+			)}
+		</button>
+	);
+}

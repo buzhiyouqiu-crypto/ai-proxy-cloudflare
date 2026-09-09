@@ -1,8 +1,232 @@
-CREATE TABLE IF NOT EXISTS app_kv (
-  key TEXT PRIMARY KEY NOT NULL,
-  value TEXT NOT NULL,
-  created_at INTEGER NOT NULL,
-  updated_at INTEGER NOT NULL
+-- Keyaos D1 Schema
+
+-- 1. Downstream API keys (platform-issued access tokens)
+CREATE TABLE IF NOT EXISTS api_keys (
+    id TEXT PRIMARY KEY,
+    owner_id TEXT NOT NULL,
+    name TEXT NOT NULL,
+    key_hash TEXT NOT NULL,
+    encrypted_key TEXT NOT NULL,
+    key_hint TEXT NOT NULL,
+    is_enabled INTEGER DEFAULT 1,
+    expires_at INTEGER,
+    quota_limit REAL, 
+    quota_used REAL NOT NULL DEFAULT 0,
+    allowed_models TEXT,
+    allowed_ips TEXT,
+    created_at INTEGER NOT NULL
 );
 
-CREATE INDEX IF NOT EXISTS idx_app_kv_updated_at ON app_kv(updated_at);
+CREATE INDEX IF NOT EXISTS idx_api_keys_owner ON api_keys(owner_id);
+CREATE UNIQUE INDEX IF NOT EXISTS idx_api_keys_hash ON api_keys(key_hash);
+
+-- 2. Upstream credentials (user-hosted provider keys and quotas)
+CREATE TABLE IF NOT EXISTS upstream_credentials (
+    id TEXT PRIMARY KEY,
+    owner_id TEXT NOT NULL,
+    provider_id TEXT NOT NULL,
+    auth_type TEXT NOT NULL DEFAULT 'api_key',
+    encrypted_secret TEXT NOT NULL,
+    secret_hash TEXT NOT NULL,
+    secret_hint TEXT NOT NULL,
+    quota REAL,
+    quota_source TEXT,
+    is_enabled INTEGER DEFAULT 1,
+    price_multiplier REAL NOT NULL DEFAULT 1.0,
+    health_status TEXT DEFAULT 'unknown',
+    last_health_check INTEGER,
+    metadata TEXT,
+    added_at INTEGER NOT NULL
+);
+
+CREATE INDEX IF NOT EXISTS idx_credentials_owner ON upstream_credentials(owner_id);
+CREATE UNIQUE INDEX IF NOT EXISTS idx_credentials_secret_hash ON upstream_credentials(secret_hash);
+CREATE INDEX IF NOT EXISTS idx_credentials_provider ON upstream_credentials(provider_id, is_enabled, health_status);
+
+-- 3. Model catalog (auto-synced by cron)
+CREATE TABLE IF NOT EXISTS model_catalog (
+    id TEXT PRIMARY KEY,
+    provider_id TEXT NOT NULL,
+    model_id TEXT NOT NULL,
+    name TEXT,
+    model_type TEXT NOT NULL DEFAULT 'chat',
+    input_price REAL NOT NULL,
+    output_price REAL NOT NULL,
+    context_length INTEGER,
+    input_modalities TEXT,
+    output_modalities TEXT,
+    is_active INTEGER NOT NULL,
+    upstream_model_id TEXT,
+    metadata TEXT,
+    created INTEGER NOT NULL,
+    refreshed_at INTEGER NOT NULL
+);
+
+CREATE UNIQUE INDEX IF NOT EXISTS idx_model_catalog_provider_model ON model_catalog(provider_id, model_id);
+CREATE INDEX IF NOT EXISTS idx_model_catalog_routing ON model_catalog(model_id, is_active, input_price);
+CREATE INDEX IF NOT EXISTS idx_model_catalog_created ON model_catalog(is_active, created DESC);
+
+-- 4. API request logs (two-sided: consumer + credential owner)
+CREATE TABLE IF NOT EXISTS logs (
+    id TEXT PRIMARY KEY,
+    consumer_id TEXT NOT NULL,
+    credential_id TEXT NOT NULL,
+    credential_owner_id TEXT NOT NULL,
+    provider_id TEXT NOT NULL,
+    model_id TEXT NOT NULL,
+    input_tokens INTEGER NOT NULL,
+    output_tokens INTEGER NOT NULL,
+    base_cost REAL NOT NULL,
+    consumer_charged REAL NOT NULL DEFAULT 0,
+    provider_earned REAL NOT NULL DEFAULT 0,
+    platform_fee REAL NOT NULL DEFAULT 0,
+    price_multiplier REAL NOT NULL DEFAULT 1.0,
+    status TEXT NOT NULL DEFAULT 'ok',
+    error_code INTEGER,
+    error_detail TEXT,
+    created_at INTEGER NOT NULL
+);
+
+CREATE INDEX IF NOT EXISTS idx_logs_consumer_time ON logs(consumer_id, created_at);
+CREATE INDEX IF NOT EXISTS idx_logs_credential_owner_time ON logs(credential_owner_id, created_at);
+CREATE INDEX IF NOT EXISTS idx_logs_created ON logs(created_at);
+CREATE INDEX IF NOT EXISTS idx_logs_status_time ON logs(status, created_at);
+
+-- 5. Pre-aggregated OHLC candle data for price trend charts
+CREATE TABLE IF NOT EXISTS price_candles (
+    dimension TEXT NOT NULL,
+    dimension_value TEXT NOT NULL,
+    interval_start INTEGER NOT NULL,
+    open_price REAL NOT NULL,
+    high_price REAL NOT NULL,
+    low_price REAL NOT NULL,
+    close_price REAL NOT NULL,
+    volume INTEGER NOT NULL,
+    total_tokens INTEGER NOT NULL,
+    PRIMARY KEY (dimension, dimension_value, interval_start)
+);
+
+CREATE INDEX IF NOT EXISTS idx_candles_dimension_time ON price_candles(dimension, interval_start);
+CREATE INDEX IF NOT EXISTS idx_candles_interval ON price_candles(interval_start);
+
+-- 6. [Platform] User wallets
+CREATE TABLE IF NOT EXISTS wallets (
+    owner_id TEXT PRIMARY KEY,
+    balance REAL NOT NULL DEFAULT 0,
+    stripe_customer_id TEXT,
+    updated_at INTEGER NOT NULL
+);
+
+-- 7. [Platform] Payment records
+CREATE TABLE IF NOT EXISTS payments (
+    id TEXT PRIMARY KEY,
+    owner_id TEXT NOT NULL,
+    type TEXT NOT NULL DEFAULT 'manual',
+    stripe_session_id TEXT NOT NULL UNIQUE,
+    amount_cents INTEGER NOT NULL,
+    credits REAL NOT NULL,
+    status TEXT NOT NULL DEFAULT 'pending',
+    created_at INTEGER NOT NULL
+);
+
+CREATE INDEX IF NOT EXISTS idx_payments_owner ON payments(owner_id);
+
+-- 8. [Platform] Auto top-up configuration
+CREATE TABLE IF NOT EXISTS auto_topup_config (
+    owner_id TEXT PRIMARY KEY,
+    enabled INTEGER NOT NULL DEFAULT 0,
+    threshold REAL NOT NULL DEFAULT 5.0,
+    amount_cents INTEGER NOT NULL DEFAULT 1000,
+    payment_method_id TEXT,
+    consecutive_failures INTEGER NOT NULL DEFAULT 0,
+    last_triggered_at INTEGER,
+    paused_reason TEXT
+);
+
+-- 9. [Platform] Admin credit adjustments (audit trail for grants/revokes)
+CREATE TABLE IF NOT EXISTS credit_adjustments (
+    id TEXT PRIMARY KEY,
+    owner_id TEXT NOT NULL,
+    amount REAL NOT NULL,
+    reason TEXT,
+    created_at INTEGER NOT NULL
+);
+
+CREATE INDEX IF NOT EXISTS idx_adjustments_owner ON credit_adjustments(owner_id);
+
+-- 10. Chat threads (Dashboard AI assistant conversation persistence)
+CREATE TABLE IF NOT EXISTS chat_threads (
+    id TEXT PRIMARY KEY,
+    owner_id TEXT NOT NULL,
+    title TEXT,
+    model_id TEXT,
+    status TEXT NOT NULL DEFAULT 'regular',
+    created_at INTEGER NOT NULL,
+    updated_at INTEGER NOT NULL
+);
+
+CREATE INDEX IF NOT EXISTS idx_chat_threads_owner ON chat_threads(owner_id, updated_at DESC);
+
+-- 11. Chat messages
+CREATE TABLE IF NOT EXISTS chat_messages (
+    id TEXT PRIMARY KEY,
+    thread_id TEXT NOT NULL,
+    role TEXT NOT NULL,
+    content TEXT NOT NULL,
+    model_id TEXT,
+    created_at INTEGER NOT NULL
+);
+
+CREATE INDEX IF NOT EXISTS idx_chat_messages_thread ON chat_messages(thread_id, created_at);
+
+-- 12. Gift cards / redemption codes
+CREATE TABLE IF NOT EXISTS gift_cards (
+    code TEXT PRIMARY KEY,
+    amount REAL NOT NULL,
+    redeemed_by TEXT,
+    redeemed_at INTEGER,
+    created_by TEXT NOT NULL,
+    batch_id TEXT,
+    created_at INTEGER NOT NULL
+);
+
+CREATE INDEX IF NOT EXISTS idx_gift_cards_batch ON gift_cards(batch_id);
+CREATE INDEX IF NOT EXISTS idx_gift_cards_redeemed ON gift_cards(redeemed_by);
+
+-- 13. Werewolf game sessions (per-game analytics)
+CREATE TABLE IF NOT EXISTS werewolf_sessions (
+    id TEXT PRIMARY KEY,
+    owner_id TEXT NOT NULL,
+    player_count INTEGER NOT NULL,
+    difficulty TEXT NOT NULL DEFAULT 'normal',
+    model_used TEXT,
+    winner TEXT,
+    completed INTEGER NOT NULL DEFAULT 0,
+    rounds_played INTEGER NOT NULL DEFAULT 0,
+    duration_seconds INTEGER NOT NULL DEFAULT 0,
+    ai_calls_count INTEGER NOT NULL DEFAULT 0,
+    ai_input_tokens INTEGER NOT NULL DEFAULT 0,
+    ai_output_tokens INTEGER NOT NULL DEFAULT 0,
+    created_at INTEGER NOT NULL,
+    updated_at INTEGER NOT NULL
+);
+
+CREATE INDEX IF NOT EXISTS idx_werewolf_sessions_owner ON werewolf_sessions(owner_id, created_at DESC);
+
+-- 13. Werewolf custom characters (user-created AI personas)
+CREATE TABLE IF NOT EXISTS werewolf_characters (
+    id TEXT PRIMARY KEY,
+    owner_id TEXT NOT NULL,
+    display_name TEXT NOT NULL,
+    gender TEXT NOT NULL DEFAULT 'male',
+    age INTEGER NOT NULL DEFAULT 25,
+    mbti TEXT NOT NULL DEFAULT '',
+    basic_info TEXT,
+    style_label TEXT,
+    avatar_seed TEXT,
+    is_deleted INTEGER NOT NULL DEFAULT 0,
+    created_at INTEGER NOT NULL,
+    updated_at INTEGER NOT NULL
+);
+
+CREATE INDEX IF NOT EXISTS idx_werewolf_characters_owner ON werewolf_characters(owner_id, is_deleted);

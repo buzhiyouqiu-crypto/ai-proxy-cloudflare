@@ -1,0 +1,33 @@
+#:schema node_modules/wrangler/config-schema.json
+
+name = "keyloom-api"
+main = "worker/index.ts"
+compatibility_date = "2025-12-01"
+compatibility_flags = ["nodejs_compat"]
+
+# ─── Environment Variables ───────────────────────────────
+# Non-sensitive config goes here. All secrets and per-deployment values
+# (ADMIN_TOKEN, CLERK_*, STRIPE_*, PLATFORM_OWNER_ID) are set via
+# `wrangler secret put <NAME>` and read from .dev.vars locally.
+[vars]
+CNY_USD_RATE = "7"
+
+[placement]
+mode = "smart"
+
+[assets]
+directory = "./dist"
+binding = "ASSETS"
+
+[[d1_databases]]
+binding = "DB"
+database_name = "keyloom-db"
+database_id = "2724cd7c-166a-402a-a553-1e27f74a8422"
+migrations_dir = "migrations"
+
+[observability]
+enabled = true
+head_sampling_rate = 1
+
+[triggers]
+crons = ["*/1 * * * *", "0 */6 * * *"]

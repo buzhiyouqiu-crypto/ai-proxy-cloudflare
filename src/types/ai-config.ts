@@ -1,1 +1,0 @@
-../../ui/src/types/ai-config.ts

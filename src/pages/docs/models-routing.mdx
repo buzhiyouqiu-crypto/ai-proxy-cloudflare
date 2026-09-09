@@ -1,0 +1,160 @@
+# Models & Routing
+
+Keyaos aggregates models from multiple upstream providers and automatically routes each request to the cheapest available option.
+
+## Supported Models
+
+Models are synced automatically every minute from all connected providers. You can view the full list on the [Models page](/models) in your dashboard.
+
+Currently supported model families include:
+
+| Family | Example Models |
+|--------|---------------|
+| OpenAI | `openai/gpt-4o`, `openai/gpt-4o-mini`, `openai/o3-mini` |
+| Anthropic | `anthropic/claude-sonnet-4`, `anthropic/claude-haiku-4.5` |
+| Google | `google/gemini-2.5-pro`, `google/gemini-2.5-flash` |
+| DeepSeek | `deepseek/deepseek-chat`, `deepseek/deepseek-reasoner` |
+| xAI | `x-ai/grok-3`, `x-ai/grok-3-mini` |
+| Meta | `meta-llama/llama-4-maverick` |
+
+### Image Generation Models
+
+Models with image output capabilities are available through the same `/v1/chat/completions` endpoint using the `modalities` parameter:
+
+| Family | Example Models |
+|--------|---------------|
+| OpenAI | `openai/gpt-5-image-mini`, `openai/gpt-5-image` |
+| Google | `google/gemini-2.5-flash-image`, `google/gemini-3.1-flash-image-preview` |
+| Black Forest Labs | `black-forest-labs/flux.2-pro`, `black-forest-labs/flux.2-flex` |
+| Sourceful | `sourceful/riverflow-v2-pro`, `sourceful/riverflow-v2-fast` |
+
+See [Image Generation](/docs/multimodal-image-generation) for usage details and the full [Multimodal](/docs/multimodal) guide for all supported modalities.
+
+### Embedding Models
+
+Keyaos also provides embedding models through the OpenAI-compatible `/v1/embeddings` endpoint:
+
+| Family | Example Models |
+|--------|---------------|
+| Qwen | `qwen/qwen3-embedding-4b`, `qwen/qwen3-embedding-8b` |
+| OpenAI | `openai/text-embedding-3-small`, `openai/text-embedding-3-large` |
+| Google | `google/gemini-embedding-001` |
+| NVIDIA | `nvidia/llama-nemotron-embed-vl-1b-v2:free` |
+| BAAI | `baai/bge-large-en-v1.5`, `baai/bge-m3` |
+
+Embedding models are marked with the `embedding` type in the [Models page](/models) and can be filtered from the type tabs.
+
+> Model availability depends on your connected upstream credentials and their current health status.
+
+## Endpoints
+
+| Endpoint | Method | Description |
+|----------|--------|-------------|
+| `/v1/chat/completions` | POST | Chat completions (OpenAI-compatible) |
+| `/v1/embeddings` | POST | Text embeddings (OpenAI-compatible) |
+| `/v1/messages` | POST | Messages (Anthropic-compatible) |
+| `/v1/models` | GET | List available models |
+
+## How Routing Works
+
+When you send a request, the dispatcher executes this pipeline:
+
+1. **Credits check** — If your balance is positive, the full global credential pool is available. If zero, routing narrows to your own BYOK credentials only (self-use is free)
+2. **Price lookup** — Query `model_catalog` for all providers that carry the requested model
+3. **Credential match** — Find all enabled, healthy credentials for each provider
+4. **Effective cost** — Calculate `base_price × price_multiplier` for each combination
+5. **Global sort** — Rank all candidates by effective cost, regardless of provider
+6. **Execute** — Try the cheapest; on failure, automatically retry the next candidate
+
+This means a credential with a low `price_multiplier` on an expensive provider can beat a credential on a cheap provider — the system always finds the **global minimum**.
+
+> When credits are exhausted, your own credentials still work at zero cost. The 402 error only fires when you have neither credits nor a matching credential.
+
+## Provider Filtering
+
+You can restrict routing to specific providers by adding the `provider` field to your request:
+
+```json
+{
+  "model": "openai/gpt-4o",
+  "provider": "openrouter",
+  "messages": [{ "role": "user", "content": "Hello" }]
+}
+```
+
+Multiple providers:
+
+```json
+{
+  "model": "openai/gpt-4o",
+  "provider": ["openrouter", "oaipro"],
+  "messages": [{ "role": "user", "content": "Hello" }]
+}
+```
+
+Omit `provider` to let the system choose from all available providers.
+
+## Reasoning Effort
+
+Many models support adjustable reasoning depth — more thinking yields higher quality at the cost of more tokens. Keyaos supports three input formats and automatically normalizes them for the upstream provider.
+
+### `reasoning_effort` (OpenAI / xAI / Google style)
+
+The simplest format — a flat string parameter:
+
+```json
+{
+  "model": "openai/o4-mini",
+  "messages": [{ "role": "user", "content": "Solve: x^2 + 3x - 10 = 0" }],
+  "reasoning_effort": "high"
+}
+```
+
+Supported values: `"low"`, `"medium"`, `"high"`. Works with OpenAI o-series, xAI grok-3-mini, Google Gemini 2.5+, and any provider that accepts this parameter.
+
+### `reasoning: { effort }` (OpenRouter style)
+
+A nested object format — Keyaos automatically extracts it to `reasoning_effort`:
+
+```json
+{
+  "model": "openai/o4-mini",
+  "reasoning": { "effort": "low" },
+  "messages": [{ "role": "user", "content": "What is 15 + 28?" }]
+}
+```
+
+### `thinking` (Anthropic native)
+
+For Anthropic models via `/v1/messages`, use the native `thinking` parameter for fine-grained budget control:
+
+```json
+{
+  "model": "anthropic/claude-sonnet-4",
+  "max_tokens": 16384,
+  "thinking": { "type": "enabled", "budget_tokens": 8192 },
+  "messages": [{ "role": "user", "content": "Explain quantum entanglement." }]
+}
+```
+
+When using `reasoning_effort` via `/v1/chat/completions` with an Anthropic upstream, Keyaos automatically converts it to the native `thinking` format:
+
+| `reasoning_effort` | Anthropic `budget_tokens` |
+|--------------------|--------------------------|
+| `low` | 1,024 |
+| `medium` | 8,192 |
+| `high` | 24,576 |
+
+> Models that don't support reasoning parameters simply ignore them — the request still succeeds.
+
+## Health-Aware Failover
+
+Each credential has a health status:
+
+| Status | Meaning | Routing |
+|--------|---------|---------|
+| `ok` | Last request succeeded | Highest priority |
+| `degraded` | Received 5xx / 429 | Still included, lower priority |
+| `dead` | Received 401 / 402 / quota exhausted | Excluded |
+
+Dead credentials are automatically revived when their upstream quota is replenished (checked every 5 minutes).

@@ -1,0 +1,68 @@
+# Introduction
+
+Keyaos (氪钥枢) is an **AI API routing gateway** that unifies fragmented API credits across multiple providers into a single, intelligent endpoint.
+
+## What is Keyaos?
+
+Keyaos is **not** a model provider — it doesn't run any AI inference. It is a pure **resource orchestration layer**: receive requests, pick the cheapest available upstream credential, forward the request, and return the result.
+
+## Why Keyaos
+
+| Feature | Benefit |
+|---------|---------|
+| **Zero deposit fees** | We absorb all Stripe processing fees — $10 in = 10.00 Credits |
+| **Self-use is free** | Route through your own credentials with zero platform fees |
+| **Up to 3% service fee** | No user is ever charged more than 3% in total |
+| **No rate limit** | No per-minute request cap; supports high-concurrency workloads |
+| **Token-level billing** | Precise, transparent costs calculated at the token level |
+| **Privacy by design** | No content is ever stored — architecturally guaranteed, source-verifiable |
+
+## Core Capabilities
+
+### Unified API Endpoint
+
+Connect once, access all models. Keyaos provides OpenAI and Anthropic compatible endpoints:
+
+| Endpoint | Description | SDK Support |
+|----------|-------------|-------------|
+| `POST /v1/chat/completions` | Chat completions | OpenAI SDK, LangChain, LiteLLM |
+| `POST /v1/embeddings` | Text embeddings | OpenAI SDK |
+| `POST /v1/messages` | Anthropic Messages | Anthropic SDK |
+| `GET /v1/models` | List available models | Any HTTP client |
+
+### Multimodal
+
+Send images, PDFs, audio, and video to compatible models, or generate images and audio — all through the same chat completions endpoint. See [Multimodal](/docs/multimodal) for details.
+
+### Smart Lowest-Cost Routing
+
+Every request is routed to the cheapest available provider + credential combination. The routing engine:
+
+- Queries real-time pricing from all connected providers
+- Compares effective cost across all credential × provider pairs
+- Automatically fails over to the next cheapest option on errors
+- Ensures zero added latency — billing and health checks are fully async
+
+### Credentials Sharing Marketplace
+
+Got idle API credits sitting unused? Share them on Keyaos and earn platform credits:
+
+- Share credentials from OpenAI, Anthropic, Google, and more
+- Set your own price multiplier
+- Earn credits whenever your credentials are used
+- Withdraw shared credentials at any time
+
+## Architecture at a Glance
+
+```
+Your App → Keyaos Gateway → [Cheapest Provider]
+              ↓
+        Smart Routing
+        · Real-time pricing
+        · Health-aware failover
+        · Zero-latency streaming
+```
+
+## Open Source
+
+Keyaos is **source-available** under the [Business Source License (BSL)](https://github.com/BingoWon/Keyaos/blob/main/LICENSE). The full source code is available on [GitHub](https://github.com/BingoWon/Keyaos) for review, audit, and self-deployment.

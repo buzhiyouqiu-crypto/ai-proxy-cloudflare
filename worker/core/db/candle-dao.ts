@@ -1,0 +1,384 @@
+import type { DbPriceCandle } from "./schema";
+
+const INTERVAL_MS = 60 * 1000;
+const RETENTION_DAYS = 7;
+
+export type CandleDimension = "model:input" | "model:output" | "provider";
+
+export class CandleDao {
+	constructor(private db: D1Database) {}
+
+	/**
+	 * Aggregate real trade data into candles.
+	 * - model:input  — OHLC of effective input price per M tokens
+	 * - model:output — OHLC of effective output price per M tokens
+	 * - provider     — OHLC of price_multiplier
+	 */
+	async aggregate(since: number): Promise<void> {
+		const now = Date.now();
+		const windowStart = since || now - INTERVAL_MS;
+
+		const rows = await this.db
+			.prepare(
+				`SELECT u.provider_id, u.model_id, u.price_multiplier,
+				   u.input_tokens, u.output_tokens, u.created_at,
+				        mc.input_price, mc.output_price
+				 FROM logs u
+				 JOIN model_catalog mc
+				   ON mc.provider_id = u.provider_id AND mc.model_id = u.model_id AND mc.is_active = 1
+				 WHERE u.created_at >= ? AND u.created_at < ? AND u.status = 'ok'
+				   AND u.consumer_id != u.credential_owner_id
+				 ORDER BY u.created_at ASC`,
+			)
+			.bind(windowStart, now)
+			.all<{
+				provider_id: string;
+				model_id: string;
+				price_multiplier: number;
+				input_tokens: number;
+				output_tokens: number;
+				created_at: number;
+				input_price: number;
+				output_price: number;
+			}>();
+
+		if (!rows.results?.length) return;
+
+		type Bucket = {
+			dim: string;
+			val: string;
+			ts: number;
+			open: number;
+			high: number;
+			low: number;
+			close: number;
+			volume: number;
+			totalTokens: number;
+		};
+		const buckets = new Map<string, Bucket>();
+
+		const upsert = (
+			dim: string,
+			val: string,
+			interval: number,
+			price: number,
+			tokens: number,
+		) => {
+			const key = `${dim}\0${val}\0${interval}`;
+			const b = buckets.get(key);
+			if (b) {
+				b.high = Math.max(b.high, price);
+				b.low = Math.min(b.low, price);
+				b.close = price;
+				b.volume++;
+				b.totalTokens += tokens;
+			} else {
+				buckets.set(key, {
+					dim,
+					val,
+					ts: interval,
+					open: price,
+					high: price,
+					low: price,
+					close: price,
+					volume: 1,
+					totalTokens: tokens,
+				});
+			}
+		};
+
+		for (const row of rows.results) {
+			const interval = Math.floor(row.created_at / INTERVAL_MS) * INTERVAL_MS;
+			const mul = row.price_multiplier;
+
+			const effectiveInput = row.input_price * mul;
+			const effectiveOutput = row.output_price * mul;
+
+			if (row.input_tokens > 0 && effectiveInput > 0) {
+				upsert(
+					"model:input",
+					row.model_id,
+					interval,
+					effectiveInput,
+					row.input_tokens,
+				);
+			}
+			if (row.output_tokens > 0 && effectiveOutput > 0) {
+				upsert(
+					"model:output",
+					row.model_id,
+					interval,
+					effectiveOutput,
+					row.output_tokens,
+				);
+			}
+
+			if (mul > 0) {
+				upsert(
+					"provider",
+					row.provider_id,
+					interval,
+					mul,
+					row.input_tokens + row.output_tokens,
+				);
+			}
+		}
+
+		if (buckets.size === 0) return;
+
+		const stmt = this.db.prepare(
+			`INSERT INTO price_candles
+				(dimension, dimension_value, interval_start, open_price, high_price, low_price, close_price, volume, total_tokens)
+			 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+			 ON CONFLICT (dimension, dimension_value, interval_start) DO UPDATE SET
+				open_price  = excluded.open_price,
+				high_price  = excluded.high_price,
+				low_price   = excluded.low_price,
+				close_price = excluded.close_price,
+				volume      = excluded.volume,
+				total_tokens = excluded.total_tokens`,
+		);
+
+		const batch = [...buckets.values()].map((b) =>
+			stmt.bind(
+				b.dim,
+				b.val,
+				b.ts,
+				b.open,
+				b.high,
+				b.low,
+				b.close,
+				b.volume,
+				b.totalTokens,
+			),
+		);
+
+		for (let i = 0; i < batch.length; i += 100) {
+			await this.db.batch(batch.slice(i, i + 100));
+		}
+	}
+
+	/**
+	 * Bulk sparkline data for all items in a dimension over the last 24h.
+	 * Returns gap-filled close prices sampled at `sampleMs` intervals + 24h high/low/first/last.
+	 * Gap-fill: missing intervals use the previous close_price (no data = no price change).
+	 * low/high are derived from close_price only, consistent with the sparkline line.
+	 */
+	async getSparklines(
+		dimension: CandleDimension,
+		sampleMs = 30 * 60 * 1000,
+	): Promise<
+		Record<
+			string,
+			{
+				points: number[];
+				low: number;
+				high: number;
+				first: number;
+				last: number;
+			}
+		>
+	> {
+		const now = Date.now();
+		const since = now - 24 * 60 * 60 * 1000;
+		const res = await this.db
+			.prepare(
+				`SELECT dimension_value, interval_start, close_price
+				 FROM price_candles
+				 WHERE dimension = ? AND interval_start >= ?
+				 ORDER BY interval_start ASC`,
+			)
+			.bind(dimension, since)
+			.all<{
+				dimension_value: string;
+				interval_start: number;
+				close_price: number;
+			}>();
+
+		const SAMPLE_MS = sampleMs;
+		const groups = new Map<string, Map<number, number>>();
+
+		for (const r of res.results || []) {
+			let closes = groups.get(r.dimension_value);
+			if (!closes) {
+				closes = new Map();
+				groups.set(r.dimension_value, closes);
+			}
+			const bucket = Math.floor(r.interval_start / SAMPLE_MS) * SAMPLE_MS;
+			closes.set(bucket, r.close_price);
+		}
+
+		const alignedSince = Math.floor(since / SAMPLE_MS) * SAMPLE_MS;
+		const alignedEnd = Math.floor(now / SAMPLE_MS) * SAMPLE_MS;
+
+		const result: Record<
+			string,
+			{
+				points: number[];
+				low: number;
+				high: number;
+				first: number;
+				last: number;
+			}
+		> = {};
+
+		for (const [key, closes] of groups) {
+			const points: number[] = [];
+			let lastClose: number | null = null;
+
+			for (let ts = alignedSince; ts <= alignedEnd; ts += SAMPLE_MS) {
+				const val = closes.get(ts);
+				if (val != null) {
+					lastClose = val;
+				}
+				if (lastClose != null) {
+					points.push(lastClose);
+				}
+			}
+
+			if (points.length > 0) {
+				let low = Infinity;
+				let high = -Infinity;
+				for (const p of points) {
+					if (p < low) low = p;
+					if (p > high) high = p;
+				}
+				result[key] = {
+					points,
+					low,
+					high,
+					first: points[0],
+					last: points[points.length - 1],
+				};
+			}
+		}
+
+		return result;
+	}
+
+	async pruneOldCandles(): Promise<void> {
+		const cutoff = Date.now() - RETENTION_DAYS * 24 * 60 * 60 * 1000;
+		await this.db
+			.prepare("DELETE FROM price_candles WHERE interval_start < ?")
+			.bind(cutoff)
+			.run();
+	}
+
+	/**
+	 * Get latest close prices for all items in a dimension.
+	 * Returns a Map of dimension_value → close_price.
+	 */
+	async getLatestPrices(
+		dimension: CandleDimension,
+	): Promise<Map<string, number>> {
+		const res = await this.db
+			.prepare(
+				`SELECT dimension_value, close_price
+				 FROM price_candles
+				 WHERE dimension = ?
+				   AND interval_start = (
+				     SELECT MAX(interval_start) FROM price_candles WHERE dimension = ?
+				   )`,
+			)
+			.bind(dimension, dimension)
+			.all<{ dimension_value: string; close_price: number }>();
+
+		return new Map(
+			(res.results || []).map((r) => [r.dimension_value, r.close_price]),
+		);
+	}
+
+	/**
+	 * Fetch candles with gap-filling and optional multi-minute aggregation.
+	 * Sparse DB rows are grouped into clock-aligned buckets of `intervalMs`,
+	 * then gaps are filled using the previous close price.
+	 */
+	async getCandles(
+		dimension: CandleDimension,
+		value: string,
+		since: number,
+		intervalMs = INTERVAL_MS,
+	): Promise<DbPriceCandle[]> {
+		const alignedSince = Math.floor(since / intervalMs) * intervalMs;
+
+		const [sparseRes, seedRes] = await Promise.all([
+			this.db
+				.prepare(
+					`SELECT * FROM price_candles
+					 WHERE dimension = ? AND dimension_value = ? AND interval_start >= ?
+					 ORDER BY interval_start ASC`,
+				)
+				.bind(dimension, value, alignedSince)
+				.all<DbPriceCandle>(),
+			this.db
+				.prepare(
+					`SELECT close_price FROM price_candles
+					 WHERE dimension = ? AND dimension_value = ? AND interval_start < ?
+					 ORDER BY interval_start DESC LIMIT 1`,
+				)
+				.bind(dimension, value, alignedSince)
+				.first<{ close_price: number }>(),
+		]);
+
+		const sparse = sparseRes.results || [];
+		if (sparse.length === 0 && !seedRes) return [];
+
+		const buckets = new Map<number, DbPriceCandle[]>();
+		for (const c of sparse) {
+			const key = Math.floor(c.interval_start / intervalMs) * intervalMs;
+			let list = buckets.get(key);
+			if (!list) {
+				list = [];
+				buckets.set(key, list);
+			}
+			list.push(c);
+		}
+
+		const filled: DbPriceCandle[] = [];
+		const end = Math.floor(Date.now() / intervalMs) * intervalMs;
+		let lastClose = seedRes?.close_price ?? sparse[0]?.open_price ?? 0;
+
+		for (let ts = alignedSince; ts <= end; ts += intervalMs) {
+			const group = buckets.get(ts);
+			if (group) {
+				let high = -Infinity;
+				let low = Infinity;
+				let volume = 0;
+				let totalTokens = 0;
+				for (const c of group) {
+					if (c.high_price > high) high = c.high_price;
+					if (c.low_price < low) low = c.low_price;
+					volume += c.volume;
+					totalTokens += c.total_tokens;
+				}
+				const last = group[group.length - 1];
+				filled.push({
+					dimension,
+					dimension_value: value,
+					interval_start: ts,
+					open_price: group[0].open_price,
+					high_price: high,
+					low_price: low,
+					close_price: last.close_price,
+					volume,
+					total_tokens: totalTokens,
+				});
+				lastClose = last.close_price;
+			} else if (lastClose > 0) {
+				filled.push({
+					dimension,
+					dimension_value: value,
+					interval_start: ts,
+					open_price: lastClose,
+					high_price: lastClose,
+					low_price: lastClose,
+					close_price: lastClose,
+					volume: 0,
+					total_tokens: 0,
+				});
+			}
+		}
+
+		return filled;
+	}
+}

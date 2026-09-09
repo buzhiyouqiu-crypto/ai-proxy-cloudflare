@@ -1,23 +1,28 @@
-# Local development environment variables
-# Copy this file to .dev.vars and fill in your actual values
-# Never commit .dev.vars to version control
+# Keyaos — Worker Secrets (local development)
+# Copy to .dev.vars and fill in your values.
+# Production secrets: set via `wrangler secret put <NAME>`
 
-# Cloudflare account identifier (get from dash.cloudflare.com)
-CLOUDFLARE_ACCOUNT_ID=your_account_id_here
+# ─── Core (required) ─────────────────────────────────────
+ADMIN_TOKEN=changeme
+# Generate with: openssl rand -base64 32
+ENCRYPTION_KEY=
 
-# Encryption token for ai.json.enc
-# This must match the password used to encrypt the ai.json.enc file:
-#   openssl enc -aes-256-cbc -a -pbkdf2 -iter 100000 -salt \
-#     -in ai.json -out ai.json.enc -pass pass:"${CRYPTOKEN}"
-AI_JSON_CRYPTOKEN=your_crypto_token_here
+# ─── Platform (optional — enables multi-tenancy) ─────────
+# PLATFORM_OWNER_ID=user_xxxxx
+# CLERK_PUBLISHABLE_KEY=pk_test_xxxxx
+# CLERK_SECRET_KEY=sk_test_xxxxx
+# STRIPE_SECRET_KEY=sk_test_xxxxx
+# STRIPE_WEBHOOK_SECRET=whsec_xxxxx
 
-# Cloudflare AI Gateway authentication token
-# Get from your Cloudflare dashboard → Workers & Pages → AI Gateway
-CLOUDFLARE_AIG_TOKEN=your_aig_token_here
+# ─── Model Catalog Sync ──────────────────────────────────
+# By default the worker syncs model_catalog from keyaos.com every minute.
+# Set LOCAL_SYNC=1 to run local three-phase sync (requires system keys below).
+# LOCAL_SYNC=1
 
-# Optional: override source URL for encrypted AI config
-# Default is https://mcp.fufuni.pp.ua/ai.json.enc
-# AI_JSON_ENC_URL=https://mcp.fufuni.pp.ua/ai.json.enc
-
-# Optional: enable debug logging
-DEBUG=false
+# ─── Provider System Keys (optional — only when LOCAL_SYNC=1) ──
+# The sync service fetches live models from provider APIs.
+# DEEPSEEK_KEY=sk-xxxxx
+# OPENAI_KEY=sk-proj-xxxxx
+# GEMINI_KEY=AIzaxxxxx
+# ANTHROPIC_KEY=sk-ant-api03-xxxxx
+# XAI_KEY=xai-xxxxx

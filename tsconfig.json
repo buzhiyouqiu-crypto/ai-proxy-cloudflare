@@ -1,26 +1,25 @@
 {
 	"compilerOptions": {
-		/* Language and Environment */
-		"target": "es2021",
-		"lib": ["es2021"],
-		"jsx": "react-jsx",
-
-		/* Modules */
-		"module": "es2022",
-		"moduleResolution": "Bundler",
-		"resolveJsonModule": true,
-		"types": ["@cloudflare/workers-types"],
-
-		/* Emit */
-		"isolatedModules": true,
-
-		/* Interop Constraints */
-		"forceConsistentCasingInFileNames": true,
-
-		/* Type Checking */
+		"target": "ESNext",
+		"module": "ESNext",
+		"moduleResolution": "bundler",
+		"lib": ["ESNext"],
+		"types": ["@cloudflare/workers-types/2023-07-01"],
 		"strict": true,
-		"skipLibCheck": true
+		"skipLibCheck": true,
+		"esModuleInterop": true,
+		"forceConsistentCasingInFileNames": true,
+		"resolveJsonModule": true,
+		"isolatedModules": true,
+		"noEmit": true,
+		"jsx": "react-jsx",
+		"baseUrl": ".",
+		"paths": {
+			"@core/*": ["worker/core/*"],
+			"@platform/*": ["worker/platform/*"],
+			"@shared/*": ["worker/shared/*"]
+		}
 	},
-	"include": ["worker-configuration.d.ts", "src/**/*.ts"],
-	"exclude": ["test"]
+	"include": ["worker/**/*.ts"],
+	"exclude": ["node_modules", "dist"]
 }

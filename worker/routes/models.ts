@@ -1,0 +1,200 @@
+import { Hono } from "hono";
+import { CandleDao } from "../core/db/candle-dao";
+import { CatalogDao } from "../core/db/catalog-dao";
+import { getVisibleProviders } from "../core/providers/registry";
+import { edgeCache } from "../shared/cache";
+import type { AppEnv } from "../shared/types";
+
+/**
+ * /api/catalog — Raw model_catalog export for remote sync.
+ * Self-hosted deployments fetch this to populate their local DB.
+ */
+export const catalogRouter = new Hono<AppEnv>();
+
+catalogRouter.get("/", edgeCache(3600), async (c) => {
+	const dao = new CatalogDao(c.env.DB);
+	const rows = await dao.getAllActive();
+	return c.json({
+		data: rows.map(({ is_active, refreshed_at, ...entry }) => entry),
+	});
+});
+
+/** Strip markdown links and bare URLs from model descriptions */
+function cleanDescription(raw: unknown): string | null {
+	if (typeof raw !== "string" || !raw) return null;
+	return (
+		raw
+			.replace(/\[([^\]]*)\]\([^)]+\)/g, "") // [text](url) → removed entirely
+			.replace(/https?:\/\/\S+/g, "") // bare URLs
+			.replace(/ {2,}/g, " ") // collapse multiple spaces
+			.replace(/\n{3,}/g, "\n\n") // collapse excess blank lines
+			.trim() || null
+	);
+}
+
+/**
+ * /v1/models — Public API, one entry per model.
+ *
+ * Pricing uses pre-aggregated candle data (updated every minute):
+ * - prompt/completion from model:input / model:output candle close prices
+ * - Multi-modal prices derived via discount ratio against metadata
+ * - Zero real-time computation per request
+ */
+export const publicModelsRouter = new Hono<AppEnv>();
+
+publicModelsRouter.get("/", edgeCache(3600), async (c) => {
+	const dao = new CatalogDao(c.env.DB);
+	const candleDao = new CandleDao(c.env.DB);
+
+	const [all, inputPrices, outputPrices] = await Promise.all([
+		dao.getActiveWithBestMultiplier(),
+		candleDao.getLatestPrices("model:input"),
+		candleDao.getLatestPrices("model:output"),
+	]);
+
+	const visibleIds = new Set(getVisibleProviders().map((p) => p.info.id));
+
+	// USD-per-M-tokens → USD-per-token string (OpenRouter format)
+	const toUsdPerToken = (usdPerM: number) => String(usdPerM / 1_000_000);
+
+	// Group by model_id (Map preserves insertion order = created DESC)
+	const groups = new Map<
+		string,
+		{
+			meta: Record<string, unknown> | null;
+			providers: string[];
+			name: string | null;
+			modelType: string;
+			contextLength: number | null;
+		}
+	>();
+
+	for (const row of all) {
+		if (!visibleIds.has(row.provider_id)) continue;
+
+		let g = groups.get(row.model_id);
+		if (!g) {
+			const meta = row.metadata ? JSON.parse(row.metadata) : null;
+			g = {
+				meta,
+				providers: [],
+				name: row.name,
+				modelType: row.model_type,
+				contextLength: row.context_length,
+			};
+			groups.set(row.model_id, g);
+		}
+
+		if (row.best_multiplier != null) {
+			if (!g.providers.includes(row.provider_id))
+				g.providers.push(row.provider_id);
+		}
+	}
+
+	const keyAllowedModels = c.get("allowed_models");
+	const typeFilter = c.req.query("type");
+
+	const data = [...groups.entries()]
+		.filter(([id, g]) => {
+			if (keyAllowedModels && !keyAllowedModels.includes(id)) return false;
+			if (typeFilter && g.modelType !== typeFilter) return false;
+			return true;
+		})
+		.map(([id, g]) => {
+			const m = g.meta;
+
+			// Build pricing from candle data
+			const basePricing = (m?.pricing as Record<string, string>) ?? {};
+			const pricing: Record<string, string> = { ...basePricing };
+
+			const inputClose = inputPrices.get(id);
+			const outputClose = outputPrices.get(id);
+
+			if (inputClose != null) {
+				pricing.prompt = toUsdPerToken(inputClose);
+
+				// Derive discount ratio for multi-modal pricing
+				const originalPrompt =
+					Number.parseFloat(basePricing.prompt || "0") * 1_000_000;
+				if (originalPrompt > 0) {
+					const ratio = inputClose / originalPrompt;
+					for (const [key, val] of Object.entries(basePricing)) {
+						if (key !== "prompt" && key !== "completion" && val) {
+							pricing[key] = String(Number.parseFloat(val) * ratio);
+						}
+					}
+				}
+			}
+			if (outputClose != null) {
+				pricing.completion = toUsdPerToken(outputClose);
+			}
+
+			return {
+				id,
+				type: g.modelType,
+				name: (m?.name as string) ?? g.name ?? id,
+				created: (m?.created as number) ?? 0,
+				description: cleanDescription(m?.description),
+				hugging_face_id: (m?.hugging_face_id as string) ?? null,
+				context_length: (m?.context_length as number) ?? g.contextLength,
+				pricing,
+				architecture: (m?.architecture as Record<string, unknown>) ?? null,
+				supported_parameters: (m?.supported_parameters as string[]) ?? null,
+				providers: g.providers,
+			};
+		});
+
+	return c.json({ data });
+});
+
+/**
+ * /api/models — Dashboard API, multi-provider comparison.
+ * Returns all provider offerings with per-provider pricing.
+ * Multiplier derives from candle close_price (historical record), falling back to credential best_multiplier.
+ * All display data reflects historical candle records — never real-time credential predictions.
+ */
+export const dashboardModelsRouter = new Hono<AppEnv>();
+
+dashboardModelsRouter.get("/", edgeCache(3600), async (c) => {
+	const dao = new CatalogDao(c.env.DB);
+	const candleDao = new CandleDao(c.env.DB);
+
+	const [all, providerMuls] = await Promise.all([
+		dao.getActiveWithBestMultiplier(),
+		candleDao.getLatestPrices("provider"),
+	]);
+
+	const visibleIds = new Set(getVisibleProviders().map((p) => p.info.id));
+
+	const data = all
+		.filter((m) => visibleIds.has(m.provider_id))
+		.map((m) => {
+			const mul = providerMuls.get(m.provider_id) ?? m.best_multiplier;
+			const meta = m.metadata ? JSON.parse(m.metadata) : null;
+			return {
+				id: m.model_id,
+				type: m.model_type,
+				provider_id: m.provider_id,
+				name: m.name,
+				description: cleanDescription(meta?.description),
+				input_price: m.input_price,
+				output_price: m.output_price,
+				...(mul != null &&
+					mul < 1 && {
+						platform_input_price: m.input_price * mul,
+						platform_output_price: m.output_price * mul,
+					}),
+				context_length: m.context_length,
+				created: m.created || null,
+				input_modalities: m.input_modalities
+					? JSON.parse(m.input_modalities)
+					: null,
+				output_modalities: m.output_modalities
+					? JSON.parse(m.output_modalities)
+					: null,
+				supported_parameters: (meta?.supported_parameters as string[]) ?? null,
+			};
+		});
+
+	return c.json({ data });
+});

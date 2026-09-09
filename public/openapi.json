@@ -1,0 +1,1124 @@
+{
+  "openapi": "3.1.0",
+  "info": {
+    "title": "Keyaos API",
+    "version": "1.0.0",
+    "description": "Keyaos is a unified AI gateway that routes requests to 300+ models across multiple providers. It supports both OpenAI and Anthropic SDK formats, with automatic provider selection, billing, and credential management.\n\n## Authentication\n\nAll `/v1/*` endpoints require authentication via one of:\n- `Authorization: Bearer <api-key>` (recommended)\n- `x-api-key: <api-key>`\n\nGet your API key from the [Dashboard](/dashboard/api-keys).",
+    "contact": {
+      "name": "Keyaos Support",
+      "url": "https://keyaos.com/docs/contact"
+    }
+  },
+  "servers": [
+    {
+      "url": "https://keyaos.com",
+      "description": "Production"
+    },
+    {
+      "url": "http://localhost:5173",
+      "description": "Local development"
+    }
+  ],
+  "security": [
+    { "bearerAuth": [] },
+    { "apiKeyHeader": [] }
+  ],
+  "tags": [
+    { "name": "Chat", "description": "OpenAI SDK-compatible chat completions" },
+    { "name": "Embeddings", "description": "OpenAI SDK-compatible text embeddings" },
+    { "name": "Messages", "description": "Anthropic SDK-compatible messages" },
+    { "name": "Model Catalog", "description": "Browse and filter available models" },
+    { "name": "Account", "description": "Credit balance and account info" },
+    { "name": "System", "description": "Health check and service status" }
+  ],
+  "paths": {
+    "/v1/chat/completions": {
+      "post": {
+        "operationId": "createChatCompletion",
+        "summary": "Create chat completion",
+        "description": "Creates a chat completion using the OpenAI-compatible format. Keyaos automatically routes to the best available provider for the requested model.\n\nSupports streaming via `stream: true` (Server-Sent Events).",
+        "tags": ["Chat"],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": { "$ref": "#/components/schemas/ChatCompletionRequest" },
+              "examples": {
+                "basic": {
+                  "summary": "Basic completion",
+                  "value": {
+                    "model": "openai/gpt-4o",
+                    "messages": [
+                      { "role": "system", "content": "You are a helpful assistant." },
+                      { "role": "user", "content": "What is Keyaos?" }
+                    ]
+                  }
+                },
+                "streaming": {
+                  "summary": "Streaming completion",
+                  "value": {
+                    "model": "anthropic/claude-sonnet-4",
+                    "messages": [
+                      { "role": "user", "content": "Write a haiku about APIs." }
+                    ],
+                    "stream": true,
+                    "temperature": 0.9,
+                    "max_tokens": 256
+                  }
+                },
+                "reasoning": {
+                  "summary": "With reasoning effort",
+                  "value": {
+                    "model": "openai/o4-mini",
+                    "messages": [
+                      { "role": "user", "content": "Solve: x^2 + 3x - 10 = 0" }
+                    ],
+                    "reasoning_effort": "high"
+                  }
+                },
+                "structuredOutput": {
+                  "summary": "Structured JSON output",
+                  "value": {
+                    "model": "openai/gpt-4o",
+                    "messages": [
+                      { "role": "user", "content": "Extract the name and age from: John is 30 years old." }
+                    ],
+                    "response_format": {
+                      "type": "json_schema",
+                      "json_schema": {
+                        "name": "person",
+                        "strict": true,
+                        "schema": {
+                          "type": "object",
+                          "properties": {
+                            "name": { "type": "string" },
+                            "age": { "type": "integer" }
+                          },
+                          "required": ["name", "age"]
+                        }
+                      }
+                    }
+                  }
+                },
+                "toolCalling": {
+                  "summary": "Function calling",
+                  "value": {
+                    "model": "openai/gpt-4o",
+                    "messages": [
+                      { "role": "user", "content": "What's the weather in Tokyo?" }
+                    ],
+                    "tools": [
+                      {
+                        "type": "function",
+                        "function": {
+                          "name": "get_weather",
+                          "description": "Get the current weather in a location",
+                          "parameters": {
+                            "type": "object",
+                            "properties": {
+                              "location": { "type": "string" }
+                            },
+                            "required": ["location"]
+                          }
+                        }
+                      }
+                    ]
+                  }
+                },
+                "providerFilter": {
+                  "summary": "With provider filtering",
+                  "value": {
+                    "model": "deepseek/deepseek-v3.2",
+                    "messages": [
+                      { "role": "user", "content": "Hello" }
+                    ],
+                    "provider": "siliconflow"
+                  }
+                }
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Chat completion response",
+            "headers": {
+              "x-request-id": { "schema": { "type": "string" }, "description": "Unique request identifier for debugging" },
+              "x-provider": { "schema": { "type": "string" }, "description": "Upstream provider that served the request" },
+              "x-credential-id": { "schema": { "type": "string" }, "description": "Credential used for the request" }
+            },
+            "content": {
+              "application/json": {
+                "schema": { "$ref": "#/components/schemas/ChatCompletionResponse" }
+              },
+              "text/event-stream": {
+                "description": "When `stream: true`, response is delivered as SSE with OpenAI delta format."
+              }
+            }
+          },
+          "400": { "$ref": "#/components/responses/BadRequest" },
+          "401": { "$ref": "#/components/responses/Unauthorized" },
+          "402": { "$ref": "#/components/responses/InsufficientCredits" },
+          "503": { "$ref": "#/components/responses/NoProvider" }
+        }
+      }
+    },
+    "/v1/embeddings": {
+      "post": {
+        "operationId": "createEmbedding",
+        "summary": "Create embedding",
+        "description": "Creates embeddings for the given input text using the specified model. Supports single strings, arrays of strings, and token arrays as input.\n\nBrowse available embedding models via `GET /v1/models?type=embedding`.",
+        "tags": ["Embeddings"],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": { "$ref": "#/components/schemas/EmbeddingRequest" },
+              "examples": {
+                "basic": {
+                  "summary": "Single text input",
+                  "value": {
+                    "model": "qwen/qwen3-embedding-4b",
+                    "input": "The quick brown fox jumps over the lazy dog"
+                  }
+                },
+                "batch": {
+                  "summary": "Batch text input",
+                  "value": {
+                    "model": "openai/text-embedding-3-small",
+                    "input": ["Hello world", "Goodbye world"],
+                    "encoding_format": "float"
+                  }
+                },
+                "dimensions": {
+                  "summary": "With reduced dimensions",
+                  "value": {
+                    "model": "openai/text-embedding-3-large",
+                    "input": "Dimensionality reduction example",
+                    "dimensions": 512
+                  }
+                }
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Embedding response",
+            "headers": {
+              "x-request-id": { "schema": { "type": "string" }, "description": "Unique request identifier" },
+              "x-provider": { "schema": { "type": "string" }, "description": "Upstream provider that served the request" },
+              "x-credential-id": { "schema": { "type": "string" }, "description": "Credential used for the request" }
+            },
+            "content": {
+              "application/json": {
+                "schema": { "$ref": "#/components/schemas/EmbeddingResponse" }
+              }
+            }
+          },
+          "400": { "$ref": "#/components/responses/BadRequest" },
+          "401": { "$ref": "#/components/responses/Unauthorized" },
+          "402": { "$ref": "#/components/responses/InsufficientCredits" },
+          "503": { "$ref": "#/components/responses/NoProvider" }
+        }
+      }
+    },
+    "/v1/messages": {
+      "post": {
+        "operationId": "createMessage",
+        "summary": "Create message",
+        "description": "Creates a message using the Anthropic Messages API format. Keyaos translates between Anthropic and OpenAI formats internally, so you can use **any model** through this endpoint — not just Anthropic models.\n\nSupports text, images, PDFs, tool use, and extended thinking.",
+        "tags": ["Messages"],
+        "requestBody": {
+          "required": true,
+          "content": {
+            "application/json": {
+              "schema": { "$ref": "#/components/schemas/AnthropicMessageRequest" },
+              "examples": {
+                "basic": {
+                  "summary": "Basic message",
+                  "value": {
+                    "model": "anthropic/claude-sonnet-4",
+                    "max_tokens": 1024,
+                    "messages": [
+                      { "role": "user", "content": "Explain quantum computing in one paragraph." }
+                    ]
+                  }
+                },
+                "thinking": {
+                  "summary": "With extended thinking",
+                  "value": {
+                    "model": "anthropic/claude-sonnet-4",
+                    "max_tokens": 8192,
+                    "thinking": { "type": "enabled", "budget_tokens": 4096 },
+                    "messages": [
+                      { "role": "user", "content": "What is 27 * 453?" }
+                    ]
+                  }
+                },
+                "structuredOutput": {
+                  "summary": "Structured output via output_config",
+                  "value": {
+                    "model": "anthropic/claude-sonnet-4",
+                    "max_tokens": 1024,
+                    "output_config": {
+                      "format": {
+                        "type": "json_schema",
+                        "schema": {
+                          "type": "object",
+                          "properties": {
+                            "name": { "type": "string" },
+                            "age": { "type": "integer" }
+                          },
+                          "required": ["name", "age"]
+                        }
+                      }
+                    },
+                    "messages": [
+                      { "role": "user", "content": "Extract: John is 30 years old." }
+                    ]
+                  }
+                },
+                "streaming": {
+                  "summary": "Streaming message",
+                  "value": {
+                    "model": "anthropic/claude-sonnet-4",
+                    "max_tokens": 1024,
+                    "stream": true,
+                    "messages": [
+                      { "role": "user", "content": "Hello" }
+                    ]
+                  }
+                }
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {
+            "description": "Message response",
+            "headers": {
+              "x-request-id": { "schema": { "type": "string" }, "description": "Unique request identifier" },
+              "x-provider": { "schema": { "type": "string" }, "description": "Upstream provider" },
+              "x-credential-id": { "schema": { "type": "string" }, "description": "Credential used" }
+            },
+            "content": {
+              "application/json": {
+                "schema": { "$ref": "#/components/schemas/AnthropicMessageResponse" }
+              },
+              "text/event-stream": {
+                "description": "When `stream: true`, response is delivered as Anthropic SSE format: `message_start`, `content_block_start`, `content_block_delta`, `content_block_stop`, `message_delta`, `message_stop`."
+              }
+            }
+          },
+          "400": {
+            "description": "Invalid request",
+            "content": {
+              "application/json": {
+                "schema": { "$ref": "#/components/schemas/AnthropicError" }
+              }
+            }
+          },
+          "401": { "$ref": "#/components/responses/Unauthorized" },
+          "500": {
+            "description": "Internal server error",
+            "content": {
+              "application/json": {
+                "schema": { "$ref": "#/components/schemas/AnthropicError" }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/v1/models": {
+      "get": {
+        "operationId": "listModels",
+        "summary": "List models",
+        "description": "Returns all available models with pricing, context length, architecture details, and provider information.\n\nUse `?type=chat` or `?type=embedding` to filter by model type. Without the parameter, all models are returned.\n\nResponses are edge-cached for 30 seconds.",
+        "tags": ["Model Catalog"],
+        "parameters": [
+          {
+            "name": "type",
+            "in": "query",
+            "description": "Filter by model type",
+            "required": false,
+            "schema": { "type": "string", "enum": ["chat", "embedding"] }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "List of available models",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "data": {
+                      "type": "array",
+                      "items": { "$ref": "#/components/schemas/Model" }
+                    }
+                  },
+                  "required": ["data"]
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/v1/credits": {
+      "get": {
+        "operationId": "getCredits",
+        "summary": "Get credit balance",
+        "description": "Returns the authenticated user's current credit balance in USD.",
+        "tags": ["Account"],
+        "responses": {
+          "200": {
+            "description": "Credit balance",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "data": {
+                      "type": "object",
+                      "properties": {
+                        "balance": { "type": "number", "description": "Current balance in USD", "example": 12.50 }
+                      },
+                      "required": ["balance"]
+                    }
+                  },
+                  "required": ["data"]
+                }
+              }
+            }
+          },
+          "401": { "$ref": "#/components/responses/Unauthorized" }
+        }
+      }
+    },
+    "/health": {
+      "get": {
+        "operationId": "healthCheck",
+        "summary": "Health check",
+        "description": "Simple health check endpoint. No authentication required.",
+        "tags": ["System"],
+        "security": [],
+        "responses": {
+          "200": {
+            "description": "Service is healthy",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "object",
+                  "properties": {
+                    "status": { "type": "string", "enum": ["ok"], "example": "ok" }
+                  },
+                  "required": ["status"]
+                }
+              }
+            }
+          }
+        }
+      }
+    }
+  },
+  "components": {
+    "securitySchemes": {
+      "bearerAuth": {
+        "type": "http",
+        "scheme": "bearer",
+        "description": "API key as Bearer token: `Authorization: Bearer sk-keyaos-xxxxx`"
+      },
+      "apiKeyHeader": {
+        "type": "apiKey",
+        "in": "header",
+        "name": "x-api-key",
+        "description": "API key via header: `x-api-key: sk-keyaos-xxxxx`"
+      }
+    },
+    "schemas": {
+      "ChatCompletionRequest": {
+        "type": "object",
+        "required": ["model", "messages"],
+        "properties": {
+          "model": { "type": "string", "description": "Model ID in `org/model` format", "example": "openai/gpt-4o" },
+          "messages": {
+            "type": "array",
+            "description": "Conversation messages",
+            "items": { "$ref": "#/components/schemas/ChatMessage" }
+          },
+          "stream": { "type": "boolean", "default": false, "description": "Enable Server-Sent Events streaming" },
+          "temperature": { "type": "number", "minimum": 0, "maximum": 2, "default": 1, "description": "Sampling temperature (0–2)" },
+          "top_p": { "type": "number", "minimum": 0, "maximum": 1, "default": 1, "description": "Nucleus sampling (0–1)" },
+          "frequency_penalty": { "type": "number", "minimum": -2, "maximum": 2, "default": 0, "description": "Penalize tokens by frequency (-2 to 2)" },
+          "presence_penalty": { "type": "number", "minimum": -2, "maximum": 2, "default": 0, "description": "Penalize tokens already present (-2 to 2)" },
+          "max_tokens": { "type": "integer", "description": "Maximum tokens to generate (deprecated, prefer `max_completion_tokens`)" },
+          "max_completion_tokens": { "type": "integer", "description": "Maximum tokens in the completion" },
+          "seed": { "type": "integer", "nullable": true, "description": "Seed for deterministic outputs (best-effort)" },
+          "stop": {
+            "description": "Stop sequences (up to 4)",
+            "oneOf": [
+              { "type": "string" },
+              { "type": "array", "items": { "type": "string" }, "maxItems": 4 }
+            ]
+          },
+          "logprobs": { "type": "boolean", "nullable": true, "description": "Return log probabilities of output tokens" },
+          "top_logprobs": { "type": "integer", "minimum": 0, "maximum": 20, "nullable": true, "description": "Number of most likely tokens to return (requires `logprobs: true`)" },
+          "reasoning_effort": {
+            "type": "string",
+            "enum": ["low", "medium", "high"],
+            "description": "Reasoning effort level (OpenAI / xAI / Gemini style). For Anthropic models, this is automatically converted to the native `thinking` parameter."
+          },
+          "reasoning": { "$ref": "#/components/schemas/ReasoningConfig" },
+          "thinking": {
+            "type": "object",
+            "description": "Anthropic native thinking configuration (pass-through). Only used when the upstream is an Anthropic model.",
+            "properties": {
+              "type": { "type": "string", "enum": ["enabled", "disabled", "adaptive"] },
+              "budget_tokens": { "type": "integer", "description": "Token budget for thinking" }
+            }
+          },
+          "response_format": { "$ref": "#/components/schemas/ResponseFormat" },
+          "tools": {
+            "type": "array",
+            "description": "Available tools for function calling",
+            "items": { "$ref": "#/components/schemas/ToolDefinition" }
+          },
+          "tool_choice": { "$ref": "#/components/schemas/ToolChoice" },
+          "parallel_tool_calls": { "type": "boolean", "nullable": true, "description": "Allow parallel tool calls" },
+          "user": { "type": "string", "description": "Unique end-user identifier for abuse monitoring" },
+          "provider": {
+            "description": "Keyaos extension — restrict routing to specific provider(s)",
+            "oneOf": [
+              { "type": "string" },
+              { "type": "array", "items": { "type": "string" } }
+            ]
+          }
+        }
+      },
+      "ChatMessage": {
+        "type": "object",
+        "required": ["role"],
+        "properties": {
+          "role": { "type": "string", "enum": ["system", "developer", "user", "assistant", "tool"], "description": "Message role" },
+          "content": {
+            "description": "Message content — string, null (for tool-call-only assistant messages), or array of content parts",
+            "oneOf": [
+              { "type": "string" },
+              { "type": "null" },
+              {
+                "type": "array",
+                "items": { "$ref": "#/components/schemas/ContentPart" }
+              }
+            ]
+          },
+          "name": { "type": "string", "description": "Optional participant name" },
+          "tool_calls": {
+            "type": "array",
+            "description": "Tool calls (assistant messages only)",
+            "items": { "$ref": "#/components/schemas/ToolCall" }
+          },
+          "tool_call_id": { "type": "string", "description": "Tool call ID this message responds to (tool messages only)" },
+          "refusal": { "type": "string", "nullable": true, "description": "Refusal message if content was refused" }
+        }
+      },
+      "ContentPart": {
+        "type": "object",
+        "required": ["type"],
+        "properties": {
+          "type": { "type": "string", "enum": ["text", "image_url", "input_audio"], "description": "Content part type" },
+          "text": { "type": "string", "description": "Text content (for type: text)" },
+          "image_url": {
+            "type": "object",
+            "description": "Image reference (for type: image_url)",
+            "properties": {
+              "url": { "type": "string", "description": "Image URL or base64 data URI" },
+              "detail": { "type": "string", "enum": ["auto", "low", "high"], "default": "auto" }
+            },
+            "required": ["url"]
+          },
+          "input_audio": {
+            "type": "object",
+            "description": "Audio input (for type: input_audio)",
+            "properties": {
+              "data": { "type": "string", "description": "Base64-encoded audio data" },
+              "format": { "type": "string", "description": "Audio format (wav, mp3, etc.)" }
+            },
+            "required": ["data", "format"]
+          }
+        }
+      },
+      "ToolCall": {
+        "type": "object",
+        "required": ["id", "type", "function"],
+        "properties": {
+          "id": { "type": "string", "description": "Tool call identifier" },
+          "type": { "type": "string", "enum": ["function"] },
+          "function": {
+            "type": "object",
+            "required": ["name", "arguments"],
+            "properties": {
+              "name": { "type": "string", "description": "Function name" },
+              "arguments": { "type": "string", "description": "Function arguments as JSON string" }
+            }
+          }
+        }
+      },
+      "ToolDefinition": {
+        "type": "object",
+        "required": ["type", "function"],
+        "properties": {
+          "type": { "type": "string", "enum": ["function"] },
+          "function": {
+            "type": "object",
+            "required": ["name"],
+            "properties": {
+              "name": { "type": "string", "description": "Function name (a-z, A-Z, 0-9, underscores, dashes, max 64 chars)" },
+              "description": { "type": "string", "description": "Function description for the model" },
+              "parameters": { "type": "object", "description": "Function parameters as JSON Schema object" },
+              "strict": { "type": "boolean", "nullable": true, "description": "Enable strict schema adherence" }
+            }
+          }
+        }
+      },
+      "ToolChoice": {
+        "description": "Tool selection strategy",
+        "oneOf": [
+          { "type": "string", "enum": ["none", "auto", "required"] },
+          {
+            "type": "object",
+            "required": ["type", "function"],
+            "properties": {
+              "type": { "type": "string", "enum": ["function"] },
+              "function": {
+                "type": "object",
+                "required": ["name"],
+                "properties": {
+                  "name": { "type": "string", "description": "Force call to this specific function" }
+                }
+              }
+            }
+          }
+        ]
+      },
+      "ReasoningConfig": {
+        "type": "object",
+        "description": "Configuration for reasoning models (e.g., o3, o3-mini)",
+        "properties": {
+          "effort": {
+            "type": "string",
+            "enum": ["low", "medium", "high"],
+            "description": "Reasoning effort level"
+          },
+          "summary": {
+            "description": "Reasoning summary verbosity",
+            "oneOf": [
+              { "type": "string", "enum": ["auto", "concise", "detailed"] },
+              { "type": "null" }
+            ]
+          }
+        }
+      },
+      "ResponseFormat": {
+        "description": "Response format constraint",
+        "oneOf": [
+          {
+            "type": "object",
+            "required": ["type"],
+            "properties": {
+              "type": { "type": "string", "enum": ["text"] }
+            }
+          },
+          {
+            "type": "object",
+            "required": ["type"],
+            "properties": {
+              "type": { "type": "string", "enum": ["json_object"] }
+            }
+          },
+          {
+            "type": "object",
+            "required": ["type", "json_schema"],
+            "properties": {
+              "type": { "type": "string", "enum": ["json_schema"] },
+              "json_schema": {
+                "type": "object",
+                "required": ["name"],
+                "properties": {
+                  "name": { "type": "string", "description": "Schema name" },
+                  "description": { "type": "string", "description": "Schema description" },
+                  "schema": { "type": "object", "description": "JSON Schema definition" },
+                  "strict": { "type": "boolean", "nullable": true, "description": "Enable strict schema adherence" }
+                }
+              }
+            }
+          }
+        ]
+      },
+      "ChatCompletionResponse": {
+        "type": "object",
+        "required": ["id", "choices", "created", "model", "object"],
+        "properties": {
+          "id": { "type": "string", "example": "chatcmpl-abc123" },
+          "object": { "type": "string", "enum": ["chat.completion"] },
+          "created": { "type": "integer", "description": "Unix timestamp" },
+          "model": { "type": "string", "example": "openai/gpt-4o" },
+          "system_fingerprint": { "type": "string", "nullable": true, "description": "System fingerprint for determinism tracking" },
+          "choices": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "required": ["index", "message", "finish_reason"],
+              "properties": {
+                "index": { "type": "integer" },
+                "message": {
+                  "type": "object",
+                  "properties": {
+                    "role": { "type": "string", "enum": ["assistant"] },
+                    "content": { "type": "string", "nullable": true },
+                    "tool_calls": {
+                      "type": "array",
+                      "items": { "$ref": "#/components/schemas/ToolCall" }
+                    },
+                    "refusal": { "type": "string", "nullable": true },
+                    "reasoning_content": { "type": "string", "nullable": true, "description": "Internal chain-of-thought text (DeepSeek, xAI, Anthropic via conversion)" },
+                    "reasoning": { "type": "string", "nullable": true, "description": "Reasoning output (alternative field name used by some providers)" }
+                  }
+                },
+                "finish_reason": { "type": "string", "enum": ["stop", "length", "tool_calls", "content_filter", "error"] },
+                "logprobs": {
+                  "type": "object",
+                  "nullable": true,
+                  "description": "Log probability information",
+                  "properties": {
+                    "content": {
+                      "type": "array",
+                      "nullable": true,
+                      "items": {
+                        "type": "object",
+                        "properties": {
+                          "token": { "type": "string" },
+                          "logprob": { "type": "number" },
+                          "bytes": { "type": "array", "nullable": true, "items": { "type": "integer" } },
+                          "top_logprobs": {
+                            "type": "array",
+                            "items": {
+                              "type": "object",
+                              "properties": {
+                                "token": { "type": "string" },
+                                "logprob": { "type": "number" },
+                                "bytes": { "type": "array", "nullable": true, "items": { "type": "integer" } }
+                              }
+                            }
+                          }
+                        }
+                      }
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "usage": { "$ref": "#/components/schemas/OpenAIUsage" }
+        }
+      },
+      "OpenAIUsage": {
+        "type": "object",
+        "required": ["prompt_tokens", "completion_tokens", "total_tokens"],
+        "properties": {
+          "prompt_tokens": { "type": "integer" },
+          "completion_tokens": { "type": "integer" },
+          "total_tokens": { "type": "integer" },
+          "completion_tokens_details": {
+            "type": "object",
+            "nullable": true,
+            "properties": {
+              "reasoning_tokens": { "type": "integer", "nullable": true },
+              "accepted_prediction_tokens": { "type": "integer", "nullable": true },
+              "rejected_prediction_tokens": { "type": "integer", "nullable": true }
+            }
+          },
+          "prompt_tokens_details": {
+            "type": "object",
+            "nullable": true,
+            "properties": {
+              "cached_tokens": { "type": "integer" },
+              "audio_tokens": { "type": "integer" }
+            }
+          }
+        }
+      },
+      "AnthropicMessageRequest": {
+        "type": "object",
+        "required": ["model", "max_tokens", "messages"],
+        "properties": {
+          "model": { "type": "string", "description": "Model ID", "example": "anthropic/claude-sonnet-4.6" },
+          "max_tokens": { "type": "integer", "description": "Maximum tokens to generate", "example": 1024 },
+          "messages": {
+            "type": "array",
+            "description": "Conversation messages",
+            "items": {
+              "type": "object",
+              "required": ["role", "content"],
+              "properties": {
+                "role": { "type": "string", "enum": ["user", "assistant"] },
+                "content": {
+                  "description": "String or array of content blocks",
+                  "oneOf": [
+                    { "type": "string" },
+                    {
+                      "type": "array",
+                      "items": {
+                        "type": "object",
+                        "required": ["type"],
+                        "properties": {
+                          "type": { "type": "string", "enum": ["text", "image", "document", "tool_use", "tool_result", "thinking", "redacted_thinking"] },
+                          "text": { "type": "string" },
+                          "source": { "type": "object", "description": "Media source (for image/document blocks)" },
+                          "id": { "type": "string", "description": "Block ID (tool_use)" },
+                          "name": { "type": "string", "description": "Tool name (tool_use)" },
+                          "input": { "description": "Tool input (tool_use)" },
+                          "tool_use_id": { "type": "string", "description": "Referenced tool_use ID (tool_result)" },
+                          "content": { "description": "Result content (tool_result)" },
+                          "thinking": { "type": "string", "description": "Thinking text (thinking)" },
+                          "signature": { "type": "string", "description": "Thinking signature (thinking)" },
+                          "data": { "type": "string", "description": "Encrypted data (redacted_thinking)" },
+                          "cache_control": {
+                            "type": "object",
+                            "properties": {
+                              "type": { "type": "string", "enum": ["ephemeral"] },
+                              "ttl": { "type": "string", "enum": ["5m", "1h"] }
+                            }
+                          }
+                        }
+                      }
+                    }
+                  ]
+                }
+              }
+            }
+          },
+          "system": {
+            "description": "System prompt — string or array of text blocks with optional cache_control",
+            "oneOf": [
+              { "type": "string" },
+              {
+                "type": "array",
+                "items": {
+                  "type": "object",
+                  "required": ["type", "text"],
+                  "properties": {
+                    "type": { "type": "string", "enum": ["text"] },
+                    "text": { "type": "string" },
+                    "cache_control": {
+                      "type": "object",
+                      "properties": {
+                        "type": { "type": "string", "enum": ["ephemeral"] },
+                        "ttl": { "type": "string", "enum": ["5m", "1h"] }
+                      }
+                    }
+                  }
+                }
+              }
+            ]
+          },
+          "stream": { "type": "boolean", "default": false },
+          "temperature": { "type": "number", "minimum": 0, "maximum": 2, "description": "Sampling temperature (Anthropic models cap at 1.0)" },
+          "top_p": { "type": "number", "minimum": 0, "maximum": 1 },
+          "top_k": { "type": "integer", "description": "Top-K sampling (Anthropic-specific)" },
+          "stop_sequences": { "type": "array", "items": { "type": "string" } },
+          "metadata": {
+            "type": "object",
+            "properties": {
+              "user_id": { "type": "string", "nullable": true, "description": "End-user identifier" }
+            }
+          },
+          "thinking": {
+            "description": "Extended thinking configuration",
+            "oneOf": [
+              {
+                "type": "object",
+                "required": ["type", "budget_tokens"],
+                "properties": {
+                  "type": { "type": "string", "enum": ["enabled"] },
+                  "budget_tokens": { "type": "integer", "description": "Token budget for thinking" }
+                }
+              },
+              {
+                "type": "object",
+                "required": ["type"],
+                "properties": {
+                  "type": { "type": "string", "enum": ["disabled"] }
+                }
+              },
+              {
+                "type": "object",
+                "required": ["type"],
+                "properties": {
+                  "type": { "type": "string", "enum": ["adaptive"] }
+                }
+              }
+            ]
+          },
+          "output_config": {
+            "type": "object",
+            "description": "Output configuration (effort control and structured output)",
+            "properties": {
+              "effort": {
+                "type": "string",
+                "enum": ["low", "medium", "high", "max"],
+                "description": "Effort level for response thoroughness"
+              },
+              "format": {
+                "type": "object",
+                "description": "Structured output format",
+                "required": ["type", "schema"],
+                "properties": {
+                  "type": { "type": "string", "enum": ["json_schema"] },
+                  "schema": { "type": "object", "description": "JSON Schema definition" }
+                }
+              }
+            }
+          },
+          "tools": {
+            "type": "array",
+            "description": "Tool definitions",
+            "items": {
+              "type": "object",
+              "required": ["name", "input_schema"],
+              "properties": {
+                "name": { "type": "string" },
+                "description": { "type": "string" },
+                "input_schema": { "type": "object", "description": "JSON Schema for tool parameters" },
+                "type": { "type": "string", "enum": ["custom"], "description": "Tool type (defaults to custom)" },
+                "cache_control": {
+                  "type": "object",
+                  "properties": {
+                    "type": { "type": "string", "enum": ["ephemeral"] }
+                  }
+                }
+              }
+            }
+          },
+          "tool_choice": {
+            "description": "Tool selection strategy",
+            "oneOf": [
+              { "type": "object", "required": ["type"], "properties": { "type": { "type": "string", "enum": ["auto"] }, "disable_parallel_tool_use": { "type": "boolean" } } },
+              { "type": "object", "required": ["type"], "properties": { "type": { "type": "string", "enum": ["any"] }, "disable_parallel_tool_use": { "type": "boolean" } } },
+              { "type": "object", "required": ["type"], "properties": { "type": { "type": "string", "enum": ["none"] } } },
+              { "type": "object", "required": ["type", "name"], "properties": { "type": { "type": "string", "enum": ["tool"] }, "name": { "type": "string" }, "disable_parallel_tool_use": { "type": "boolean" } } }
+            ]
+          },
+          "provider": {
+            "description": "Keyaos extension — restrict routing to specific provider(s)",
+            "oneOf": [
+              { "type": "string" },
+              { "type": "array", "items": { "type": "string" } }
+            ]
+          }
+        }
+      },
+      "AnthropicMessageResponse": {
+        "type": "object",
+        "required": ["id", "type", "role", "content", "model", "stop_reason", "stop_sequence", "usage"],
+        "properties": {
+          "id": { "type": "string", "example": "msg_abc123" },
+          "type": { "type": "string", "enum": ["message"] },
+          "role": { "type": "string", "enum": ["assistant"] },
+          "model": { "type": "string" },
+          "content": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "required": ["type"],
+              "properties": {
+                "type": { "type": "string", "enum": ["text", "tool_use", "thinking", "redacted_thinking"] },
+                "text": { "type": "string", "description": "Text content (for type: text)" },
+                "citations": { "type": "array", "nullable": true, "description": "Source citations (for type: text)" },
+                "id": { "type": "string", "description": "Tool use ID (for type: tool_use)" },
+                "name": { "type": "string", "description": "Tool name (for type: tool_use)" },
+                "input": { "description": "Tool input (for type: tool_use)" },
+                "thinking": { "type": "string", "description": "Thinking text (for type: thinking)" },
+                "signature": { "type": "string", "description": "Thinking signature (for type: thinking)" },
+                "data": { "type": "string", "description": "Encrypted data (for type: redacted_thinking)" }
+              }
+            }
+          },
+          "stop_reason": { "type": "string", "enum": ["end_turn", "max_tokens", "stop_sequence", "tool_use", "pause_turn", "refusal"], "nullable": true },
+          "stop_sequence": { "type": "string", "nullable": true },
+          "usage": {
+            "type": "object",
+            "required": ["input_tokens", "output_tokens"],
+            "properties": {
+              "input_tokens": { "type": "integer" },
+              "output_tokens": { "type": "integer" },
+              "cache_creation_input_tokens": { "type": "integer", "nullable": true, "description": "Tokens written to cache" },
+              "cache_read_input_tokens": { "type": "integer", "nullable": true, "description": "Tokens read from cache" }
+            }
+          }
+        }
+      },
+      "AnthropicError": {
+        "type": "object",
+        "required": ["type", "error"],
+        "properties": {
+          "type": { "type": "string", "enum": ["error"] },
+          "error": {
+            "type": "object",
+            "required": ["type", "message"],
+            "properties": {
+              "type": { "type": "string" },
+              "message": { "type": "string" }
+            }
+          }
+        }
+      },
+      "EmbeddingRequest": {
+        "type": "object",
+        "required": ["model", "input"],
+        "properties": {
+          "model": { "type": "string", "description": "Embedding model ID", "example": "qwen/qwen3-embedding-4b" },
+          "input": {
+            "description": "Input text to embed — a string, array of strings, array of token integers, or array of token integer arrays",
+            "oneOf": [
+              { "type": "string" },
+              { "type": "array", "items": { "type": "string" } },
+              { "type": "array", "items": { "type": "integer" } },
+              { "type": "array", "items": { "type": "array", "items": { "type": "integer" } } }
+            ]
+          },
+          "encoding_format": { "type": "string", "enum": ["float", "base64"], "default": "float", "description": "Output encoding format" },
+          "dimensions": { "type": "integer", "description": "Number of output dimensions (supported by some models)" },
+          "user": { "type": "string", "description": "Unique end-user identifier for abuse monitoring" },
+          "provider": {
+            "description": "Restrict routing to specific provider(s)",
+            "oneOf": [
+              { "type": "string" },
+              { "type": "array", "items": { "type": "string" } }
+            ]
+          }
+        }
+      },
+      "EmbeddingResponse": {
+        "type": "object",
+        "required": ["object", "data", "model", "usage"],
+        "properties": {
+          "object": { "type": "string", "enum": ["list"] },
+          "data": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "required": ["object", "embedding", "index"],
+              "properties": {
+                "object": { "type": "string", "enum": ["embedding"] },
+                "embedding": {
+                  "description": "Embedding vector (float array or base64 string depending on encoding_format)",
+                  "oneOf": [
+                    { "type": "array", "items": { "type": "number" } },
+                    { "type": "string" }
+                  ]
+                },
+                "index": { "type": "integer" }
+              }
+            }
+          },
+          "model": { "type": "string", "example": "qwen/qwen3-embedding-4b" },
+          "usage": {
+            "type": "object",
+            "required": ["prompt_tokens", "total_tokens"],
+            "properties": {
+              "prompt_tokens": { "type": "integer" },
+              "total_tokens": { "type": "integer" }
+            }
+          }
+        }
+      },
+      "Model": {
+        "type": "object",
+        "properties": {
+          "id": { "type": "string", "description": "Model ID in `org/model` format", "example": "openai/gpt-4o" },
+          "type": { "type": "string", "enum": ["chat", "embedding"], "description": "Model type", "example": "chat" },
+          "name": { "type": "string", "description": "Display name", "example": "GPT-4o" },
+          "created": { "type": "integer", "description": "Unix timestamp" },
+          "description": { "type": "string", "nullable": true },
+          "hugging_face_id": { "type": "string", "nullable": true },
+          "context_length": { "type": "integer", "nullable": true, "example": 128000 },
+          "pricing": {
+            "type": "object",
+            "description": "USD per token",
+            "properties": {
+              "prompt": { "type": "string", "example": "0.0000025" },
+              "completion": { "type": "string", "example": "0.00001" }
+            }
+          },
+          "architecture": {
+            "type": "object",
+            "nullable": true,
+            "properties": {
+              "input_modalities": { "type": "array", "items": { "type": "string" } },
+              "output_modalities": { "type": "array", "items": { "type": "string" } },
+              "tokenizer": { "type": "string" }
+            }
+          },
+          "supported_parameters": { "type": "array", "items": { "type": "string" }, "nullable": true },
+          "providers": { "type": "array", "items": { "type": "string" }, "description": "Available providers" }
+        }
+      },
+      "OpenAIError": {
+        "type": "object",
+        "required": ["error"],
+        "properties": {
+          "error": {
+            "type": "object",
+            "required": ["message", "type"],
+            "properties": {
+              "message": { "type": "string" },
+              "type": { "type": "string" },
+              "code": { "type": "string" }
+            }
+          }
+        }
+      }
+    },
+    "responses": {
+      "BadRequest": {
+        "description": "Invalid request",
+        "content": {
+          "application/json": {
+            "schema": { "$ref": "#/components/schemas/OpenAIError" },
+            "example": { "error": { "message": "model is required", "type": "invalid_request_error", "code": "bad_request" } }
+          }
+        }
+      },
+      "Unauthorized": {
+        "description": "Authentication failed",
+        "content": {
+          "application/json": {
+            "schema": { "$ref": "#/components/schemas/OpenAIError" },
+            "example": { "error": { "message": "Invalid API key", "type": "authentication_error", "code": "invalid_api_key" } }
+          }
+        }
+      },
+      "InsufficientCredits": {
+        "description": "Insufficient credits and no own credential available",
+        "content": {
+          "application/json": {
+            "schema": { "$ref": "#/components/schemas/OpenAIError" },
+            "example": { "error": { "message": "Insufficient credits for openai/gpt-4o. Add credits or bring your own key.", "type": "billing_error", "code": "insufficient_credits_no_fallback" } }
+          }
+        }
+      },
+      "NoProvider": {
+        "description": "No provider available for the requested model",
+        "content": {
+          "application/json": {
+            "schema": { "$ref": "#/components/schemas/OpenAIError" },
+            "example": { "error": { "message": "No key available for openai/gpt-4o", "type": "service_unavailable", "code": "no_key_available" } }
+          }
+        }
+      }
+    }
+  }
+}

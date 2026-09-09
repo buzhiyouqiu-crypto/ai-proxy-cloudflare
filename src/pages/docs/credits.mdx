@@ -1,0 +1,71 @@
+# Credits
+
+Manage your credits, payments, and auto top-up from the [Credits](/dashboard/credits) page.
+
+## What are Credits?
+
+**Credits** are a prepaid balance used to pay for API requests on Keyaos. The conversion rate is fixed at **1:1**:
+
+| Amount | Credits |
+|--------|---------|
+| $1.00 USD | 1.00 Credits |
+| $10.00 USD | 10.00 Credits |
+| $100.00 USD | 100.00 Credits |
+
+## What Happens When Credits Run Out?
+
+Running out of credits **does not** mean your service stops. Keyaos automatically falls back to your own credentials:
+
+| Credits Balance | Routing Behavior | Cost |
+|----------------|-----------------|------|
+| **Positive** | Global pool — cheapest credential across all users | Self-use free; cross-user 3% fee |
+| **Zero** | Your own BYOK credentials only | **Always free** |
+| **Zero + no matching credential** | Request rejected (402) | — |
+
+This fallback ensures uninterrupted service as long as you have your own credentials configured. Self-use routing incurs **zero fees** and **zero credits**, so there is no additional cost to you.
+
+> **Tip:** Add credentials for the providers you use most on the [BYOK page](/dashboard/byok) to guarantee continuity even when your balance hits zero.
+
+## Deposit Fees
+
+**Zero.** We absorb all payment processing fees. When you buy $10.00, you receive exactly 10.00 Credits. No markup, no hidden costs.
+
+## Payment Methods
+
+We accept a wide range of payment methods:
+
+- Visa, Mastercard, American Express, JCB
+- UnionPay
+- Alipay
+
+Choose from preset amounts ($5 / $10 / $20 / $50) or enter any custom integer amount (minimum $1).
+
+## Auto Top-Up
+
+Never run out of credits mid-workflow. Auto Top-Up automatically recharges your balance when it drops below a threshold you set:
+
+1. **Add a payment method** — Complete at least one manual purchase to save your card
+2. **Set your threshold** — Choose a balance level that triggers automatic recharge (e.g., $5)
+3. **Set your amount** — Choose how much to recharge each time (e.g., $10)
+4. **Toggle on** — Enable Auto Top-Up from the [Credits](/dashboard/credits) page
+
+Auto Top-Up pauses automatically if charging fails consecutively, and you'll be notified on the dashboard.
+
+## Gift Cards
+
+Gift cards provide a convenient way to add credits to your account — ideal for teams, giveaways, or situations where direct payment is not available.
+
+### How It Works
+
+1. **Obtain a gift card code** — Codes follow the format `KAOS-XXXX-XXXX-XXXX-XXXX`
+2. **Redeem on the Credits page** — Enter the code in the "Redeem Gift Card" section on your [Credits](/dashboard/credits) page
+3. **Credits are added instantly** — The gift card amount is deposited directly into your credit balance
+
+### Important Notes
+
+- Each gift card can only be redeemed **once**
+- Redeemed gift cards appear in your **Transaction History** as a `gift_card` entry
+
+## Transaction History
+
+All activity — purchases, auto top-ups, API spend, credential earnings, gift card redemptions, and administrative adjustments — is visible on the [Credits](/dashboard/credits) page, organized into **Payments** and **Transactions** tabs.

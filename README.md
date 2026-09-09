@@ -1,673 +1,245 @@
-# AI Proxy Cloudflare Worker v3.0
+<p align="center">
+  <img src="public/logo.png" width="80" height="80" alt="Keyaos Logo" />
+</p>
 
-Modern proxy to route API requests through the **Cloudflare AI Gateway** with **multi-user and multi-vault support**.
+<h1 align="center">Keyaos</h1>
 
-## 🚀 Features
+<p align="center">
+  Edge-native AI API gateway — cost-optimized routing across providers, multi-protocol support, built on Cloudflare Workers.
+</p>
 
-- ✅ **On-the-fly decryption** of `ai.json.enc` stored in Cloudflare R2
-- ✅ **User validation** using metadata stored in Cloudflare D1
-- ✅ **Multi-provider routing** (Groq, SambaNova, Anthropic, OpenAI, Gemini, Mistral, OpenRouter, Morph)
-- ✅ **OpenAI-compatible `:provider/v1/models` endpoint** per provider
-- ✅ **Vault UI model discovery** from provider APIs, with chat/embedding classification
-- ✅ **Drag-and-drop model priority management** in the vault UI
-- ✅ **Explicit vault saves**: UI edits stay local until the user saves
-- ✅ **Backward compatibility** with both legacy request formats
-- ✅ **Forwarding through Cloudflare AI Gateway** with automatic model ID prefixing
-- ✅ Optional **rate limiting** via Durable Objects
-- ✅ Preconfigured **CORS**
-- ✅ Transparent **streaming** support
-- ✅ **Vault management** via HTTP endpoints
+<p align="center">
+  <a href="https://github.com/BingoWon/keyaos/actions/workflows/ci.yml"><img src="https://github.com/BingoWon/keyaos/actions/workflows/ci.yml/badge.svg" alt="CI" /></a>
+  <img src="https://img.shields.io/badge/runtime-Cloudflare_Workers-F38020?logo=cloudflare&logoColor=white" alt="Cloudflare Workers" />
+  <img src="https://img.shields.io/badge/TypeScript-5.9-3178C6?logo=typescript&logoColor=white" alt="TypeScript" />
+  <img src="https://img.shields.io/badge/React-19-61DAFB?logo=react&logoColor=black" alt="React 19" />
+  <img src="https://img.shields.io/badge/license-MIT-yellow" alt="MIT License" />
+</p>
 
-## 📋 Requirements
+<p align="center">
+  <a href="https://deploy.workers.cloudflare.com/?url=https://github.com/BingoWon/Keyaos">
+    <img src="https://deploy.workers.cloudflare.com/button" alt="Deploy to Cloudflare" />
+  </a>
+</p>
 
-### 1. Create `.dev.vars` for development
-
-```bash
-cp .dev.vars.example .dev.vars
-# Fill in the values:
-# - CLOUDFLARE_ACCOUNT_ID
-# - AI_JSON_CRYPTOKEN (decryption token for ai.json.enc)
-# - CLOUDFLARE_AIG_TOKEN (Cloudflare AI Gateway token)
-```
-
-### 2. Prepare ai.json.enc
-
-The `src/config/ai.json.enc` file must be:
-- Encrypted with `openssl enc -aes-256-cbc -a -pbkdf2 -iter 100000`
-- Using the same `AI_JSON_CRYPTOKEN` as the `AI_JSON_CRYPTOKEN` env variable
-- Containing valid JSON with the `AiConfig` structure:
-
-```json
-{
-  "version": 1,
-  "providers": {
-    "groq": {
-      "protocol": "openai",
-      "endpoint": "https://api.groq.com/openai/v1",
-      "gatewayEndpoint": "https://gateway.ai.cloudflare.com/v1/{account}/default/compat",
-      "gatewayModelPrefix": "groq",
-      "gatewayKey": "optional_gateway_key",
-      "keys": [
-        { "key": "gsk_xxx...", "owner": "ronan", "type": "paid" }
-      ],
-      "models": [
-        {
-          "id": "llama-3.3-70b-versatile",
-          "usage": "chat",
-          "contextWindow": 8192,
-          "maxOutputTokens": 2048,
-          "tpmLimit": null,
-          "priority": 1,
-          "tags": ["fast", "reasoning"]
-        }
-      ]
-    },
-    "sambanova": {
-      "protocol": "openai",
-      "endpoint": "https://api.sambanova.ai/api/chat/completions",
-      "gatewayEndpoint": "https://gateway.ai.cloudflare.com/v1/{account}/default/compat",
-      "gatewayModelPrefix": "custom-sambanova",
-      "keys": [
-        { "key": "xxxxxxxxxxxxxxxxx" }
-      ],
-      "models": [
-        {
-          "id": "Meta-Llama-3.3-70B-Instruct",
-          "usage": "chat",
-          "contextWindow": 4096,
-          "maxOutputTokens": 2048,
-          "tpmLimit": null,
-          "priority": 1
-        }
-      ]
-    }
-  }
-}
-```
-
-### 3. Create the D1 database and R2 bucket
-
-The worker uses D1 for small metadata (`users`, `groups`, migration flags) and
-R2 for encrypted vault objects (`vault:ai.json.enc`, per-user/group vaults and
-`vault:byok`). Usage aggregation remains in the existing Durable Object SQLite
-database.
-
-Create the resources once:
-
-```bash
-npx wrangler d1 create keyloom-db
-npx wrangler r2 bucket create keyloom-vaults
-```
-
-Copy the `database_id` returned by the first command into `wrangler.jsonc`,
-replacing `REPLACE_WITH_YOUR_D1_DATABASE_ID`, then apply the schema:
-
-```bash
-npx wrangler d1 migrations apply keyloom-db --remote
-```
-
-For local development use `--local` instead.
-
-### 4. Upload the encrypted vault to R2:
-```bash
-npx wrangler r2 object put keyloom-vaults/keyloom/vault:ai.json.enc --file=ai.json.enc
-```
-
-### 5. Initialize D1 with users
-
-The first request automatically creates the legacy admin record when the legacy
-vault exists. To initialize users manually, insert the JSON map into D1:
-
-```bash
-npx wrangler d1 execute keyloom-db --remote --command \
-  "INSERT INTO app_kv (key, value, created_at, updated_at) VALUES ('users', '{\"admin\":{\"key\":\"YOUR_TOKEN\",\"owner\":\"admin\",\"role\":\"superadmin\"}}', strftime('%s','now') * 1000, strftime('%s','now') * 1000)"
-```
-
-Do not commit real API keys or tokens to the repository. `wrangler.jsonc` must
-also contain the actual D1 database ID before a remote deploy can succeed.
+<p align="center">
+  <a href="README_CN.md">🌏 中文</a> ·
+  <a href="https://keyaos.com">🌐 Website</a> ·
+  <a href="https://keyaos.com/werewolf">🐺 Werewolf</a> ·
+  <a href="https://keyaos.com/docs">📖 Docs</a> ·
+  <a href="https://keyaos.com/api-reference">📡 API Reference</a>
+</p>
 
 ---
 
-## 📨 Usage
+You subscribe to multiple AI services — OpenRouter, DeepSeek, Google AI Studio, xAI, and more. Each has its own API key, pricing, and quota. **Keyaos unifies them behind multi-protocol API endpoints** (OpenAI, Anthropic, and more), automatically routing every request to the cheapest healthy provider.
 
-### List available providers
+Built entirely on **Cloudflare Workers + D1 + Cron Triggers**. Self-hosted deployments require no servers and fit within Cloudflare's free tier.
+
+## 🏗 Architecture
+
+```mermaid
+flowchart LR
+    Client([Client])
+
+    subgraph Keyaos ["Keyaos (Cloudflare Workers)"]
+        direction TB
+        Auth[Auth & Key Permissions]
+        Router[Cost-Optimal Router]
+        CB[Circuit Breaker]
+        Intercept[SSE Stream Interceptor]
+        Billing[Usage Tracking & Billing]
+        Sync[Cron: Model & Price Sync]
+    end
+
+    subgraph Upstream [Upstream Providers]
+        OR[OpenRouter]
+        DI[DeepInfra]
+        DS[DeepSeek]
+        OAI[OpenAI]
+        Anthr[Anthropic]
+        More["+9 more"]
+    end
+
+    Client --> Auth
+    Auth --> Router
+    Router --> CB
+    CB --> Intercept
+    Intercept --> OR & DI & DS & OAI & Anthr & More
+    Intercept -.-> Billing
+    Sync -.-> Router
+```
+
+**Request flow:** Client sends a request to any supported endpoint. Auth validates the API key and checks permissions (model restrictions, quota, expiry, IP). The router ranks all available credentials by `unit_price × multiplier` and picks the cheapest healthy one. The circuit breaker skips providers with recent failures. The SSE interceptor tee's the response stream — forwarding it to the client in real time while extracting usage data for billing in the background. A Cron job syncs model availability and pricing every minute.
+
+## ✨ Features
+
+- **Cost-optimized routing** — every request goes to the cheapest available provider
+- **Automatic failover** — quota exceeded or rate limited? The next cheapest option takes over
+- **Zero-latency streaming** — SSE responses are tee'd and forwarded in real time
+- **Auto-synced catalog** — model availability and pricing stay up to date via Cron
+- **Multi-protocol** — OpenAI Chat & Embeddings, Anthropic Messages, Google Gemini, AWS Event Stream
+- **Multimodal** — image generation, image/audio/video/PDF inputs via chat completions
+- **Reasoning effort** — unified `reasoning_effort` normalization across providers
+- **Circuit breaker** — automatic failure detection and provider bypass
+- **API key permissions** — model restrictions, expiration, spending quota, IP allowlist
+- **Two modes** — self-hosted (single user) or platform (multi-user with Clerk + Stripe)
+
+## 🚀 Quick Start
+
+### ☁️ One-Click Deploy
+
+Click the **Deploy to Cloudflare** button above, then set one secret:
 
 ```bash
-curl https://ai-proxy.inet.pp.ua/v1/providers \
-  -H "Authorization: Bearer AGE-SECRET-KEY-..."
+npx wrangler secret put ADMIN_TOKEN
 ```
 
-Returns only providers that have at least one non-expired API key:
-```json
-{
-  "object": "list",
-  "data": [
-    { "id": "groq", "object": "provider", "protocol": "openai" },
-    { "id": "anthropic", "object": "provider", "protocol": "anthropic" }
-  ]
-}
-```
+Done — D1 database, Cron Triggers, and schema are all provisioned automatically.
 
-### List available models
+You'll get Core mode (single admin, sign in with `ADMIN_TOKEN`). To enable Platform mode (multi-user Clerk auth), add these **build-time** variables in Cloudflare → Workers → your project → Settings → Build → Variables and secrets:
+
+| Variable | Required | Notes |
+|---|---|---|
+| `VITE_CLERK_PUBLISHABLE_KEY` | yes | Your own `pk_live_...` / `pk_test_...` from Clerk — must be domain-locked to your deploy origin |
+| `VITE_CRISP_WEBSITE_ID` | no | Enables Crisp support chat |
+| `VITE_GA_ID` | no | Enables Google Analytics |
+
+They must live in the **Build** tab (read by `vite build`), not the Worker runtime secrets.
+
+### 🔧 Manual Setup
 
 ```bash
-# List all models for a provider
-curl https://ai-proxy.inet.pp.ua/groq/v1/models \
-  -H "Authorization: Bearer AGE-SECRET-KEY-..."
-
-# Get a specific model
-curl https://ai-proxy.inet.pp.ua/groq/v1/models/llama-3.3-70b-versatile \
-  -H "Authorization: Bearer AGE-SECRET-KEY-..."
+pnpm install
+npx wrangler login
+npx wrangler d1 create keyaos-db    # update database_id in wrangler.toml
+npx wrangler secret put ADMIN_TOKEN
+pnpm deploy                          # builds, applies migrations, deploys
 ```
 
-Response format (OpenAI-compatible):
-```json
-{
-  "object": "list",
-  "data": [
-    {
-      "id": "llama-3.3-70b-versatile",
-      "object": "model",
-      "created": 0,
-      "owned_by": "groq",
-      "context_window": 8192,
-      "context_length": 8192,
-      "max_completion_tokens": 2048
-    }
-  ]
-}
-```
-
-### Model metadata fields
-
-Every model entry in `ai.json` is normalized to the shape consumed by the Worker
-and the UI:
-
-| Field | Required | Description |
-| --- | --- | --- |
-| `id` | yes | Provider model identifier exactly as it must be sent upstream. |
-| `usage` | yes | `chat` for chat/completion models, `embedding` for embedding models. The UI sync only imports these two families because they are the proxy-supported model classes. |
-| `contextWindow` | yes | Maximum context size in tokens. For embedding models this is the maximum input size. |
-| `maxOutputTokens` | yes | Maximum generated output tokens. Embedding models use `0` because they do not generate completions. |
-| `tpmLimit` | yes | Tokens-per-minute limit when known, otherwise `null`. Most provider model-list APIs do not expose account-specific TPM limits. |
-| `priority` | yes | Lower numbers are preferred. The UI regenerates this field from the visible model order using steps of 10: `0`, `10`, `20`, etc. |
-| `tags` | no | Optional free-form labels. |
-| `gatewayPrefix` | no | Optional per-model gateway prefix override. |
-
-### Vault UI model discovery
-
-The UI can refresh one provider's model list directly from the provider API.
-Open the provider card, then use **Refresh from API** in the Models tab. The UI
-uses the first API key whose `type` is not `expired`, queries the provider's
-model-list endpoint, normalizes the result, and replaces the provider's model
-list in the local draft. Nothing is sent to `PUT /ai.json.enc` until the user
-presses **Save Vault**.
-
-Existing model order is preserved when a refreshed model ID was already present.
-New models are appended after known models, grouped as chat models before
-embedding models. After every refresh or drag-and-drop reorder, priorities are
-rewritten in increments of 10 starting at `0`, so the first visible model has
-the highest priority and there is room to insert manual priorities between rows.
-
-Provider-specific discovery behavior:
-
-| Provider | Model-list API | Limit source | Usage classification |
-| --- | --- | --- | --- |
-| Groq | `GET https://api.groq.com/openai/v1/models` with `Authorization: Bearer` | `context_window` and `max_completion_tokens` returned by Groq. | Groq catalogue models are imported as `chat` unless their ID indicates embeddings. |
-| SambaNova | `GET /v1/models` with `Authorization: Bearer` against the configured SambaNova base URL. | `context_length` and `max_completion_tokens` returned by SambaNova. | SambaNova catalogue models are imported as `chat` unless their ID indicates embeddings. |
-| Anthropic | `GET https://api.anthropic.com/v1/models` with `x-api-key` and `anthropic-version: 2023-06-01`. | Anthropic's list endpoint returns availability only, so the UI applies documented Claude family context and output limits. | All Anthropic list results are `chat`. |
-| Gemini | `GET https://generativelanguage.googleapis.com/v1beta/models?key=...`. | `inputTokenLimit` and `outputTokenLimit` returned by Gemini. | `supportedGenerationMethods` containing embedding methods, or an embedding model ID, becomes `embedding`; other importable models are `chat`. |
-| Mistral | `GET https://api.mistral.ai/v1/models` with `Authorization: Bearer`. | `max_context_length`; if no separate output cap is returned, `maxOutputTokens` falls back to the context length because Mistral constrains prompt plus output to the model context. | Capability metadata and model IDs identify embedding models; other models are `chat`. |
-| OpenRouter | `GET https://openrouter.ai/api/v1/models?output_modalities=all` with `Authorization: Bearer`. | `top_provider.context_length` and `top_provider.max_completion_tokens`, falling back to top-level fields. | Architecture output modalities and IDs identify embeddings; other text-output models are `chat`. |
-| OpenAI | `GET https://api.openai.com/v1/models` with `Authorization: Bearer`. | OpenAI's list endpoint returns only basic metadata, so recognized chat and embedding families are enriched from documented OpenAI model limits. Non-chat/non-embedding assets are skipped. | Embedding IDs become `embedding`; recognized GPT/o-series/open-weight IDs become `chat`. |
-| Morph | `GET https://api.morphllm.com/v1/models` with `Authorization: Bearer`. | Returned limit fields when present, otherwise Morph family defaults from the public model docs. | Morph embedding IDs become `embedding`; apply/general models are `chat`; rerank-only models are skipped. |
-
-The refresh request runs in the browser. If a provider blocks browser CORS for
-its model-list endpoint, the UI will show the provider error and leave the
-existing vault unchanged.
-
-### Modern request (recommended)
+### 💻 Local Development
 
 ```bash
-curl -X POST https://ai-proxy.inet.pp.ua/groq/v1/chat/completions \
+cp .env.example .env.local           # fill in provider keys
+cp .dev.vars.example .dev.vars       # fill in secrets (ADMIN_TOKEN, etc.)
+pnpm db:setup:local
+pnpm dev                             # http://localhost:5173
+```
+
+## 📡 Usage
+
+### OpenAI Chat Completions
+
+```bash
+curl https://keyaos.<you>.workers.dev/v1/chat/completions \
+  -H "Authorization: Bearer YOUR_TOKEN" \
   -H "Content-Type: application/json" \
-  -H "Authorization: Bearer AGE-SECRET-KEY-..." \
   -d '{
-    "model": "llama-3.3-70b-versatile",
-    "messages": [{"role": "user", "content": "Hello!"}]
+    "model": "openai/gpt-4o-mini",
+    "messages": [{"role": "user", "content": "Hello"}]
   }'
 ```
 
-### Legacy request (compatibility)
+### Anthropic Messages
 
 ```bash
-curl -X POST https://ai-proxy.inet.pp.ua/openai/v1/chat/completions \
+curl https://keyaos.<you>.workers.dev/v1/messages \
+  -H "x-api-key: YOUR_TOKEN" \
   -H "Content-Type: application/json" \
-  -H "Authorization: Bearer AGE-SECRET-KEY-..." \
-  -H "X-Host-Final: api.groq.com" \
   -d '{
-    "model": "llama-3.3-70b-versatile",
-    "messages": [{"role": "user", "content": "..."}]
+    "model": "anthropic/claude-sonnet-4",
+    "max_tokens": 1024,
+    "messages": [{"role": "user", "content": "Hello"}]
   }'
 ```
 
-### Provider routing
-
-The proxy detects the provider using:
-1. **Path prefix** (priority): `/groq/`, `/sambanova/`, `/anthropic/`, `/openai/`, `/gemini/`, `/mistral/`, `/openrouter/`, `/morph/`
-2. **`X-Host-Final` header** (fallback): `api.groq.com`, `api.sambanova.ai`, etc.
-
-If neither can be determined, a 400 error is returned.
-
----
-
-## 🔄 Forwarding flow
-
-```
-Client request
-    ↓
-[Bearer token validation]
-    ↓
-[ai.json.enc decryption] (cached)
-    ↓
-[Provider detection]
-    ↓
-[Provider API key selection] (round-robin)
-    ↓
-[Model ID prefixing for gateway]
-    ↓
-Cloudflare AI Gateway
-    ↓
-Final provider (Groq, SambaNova, etc.)
-```
-
---- 
-
-## 🔄 Vault Management Endpoints
-
-The worker now includes endpoints to manage the encrypted configuration vault:
-
-### GET /ai.json.enc
-
-Returns the raw encrypted vault. Unauthenticated - anyone can download the encrypted blob.
-
-### PUT /ai.json.enc
-
-Updates the encrypted vault in R2. Requires `Authorization: Bearer` header matching `AI_JSON_CRYPTOKEN`.
-
-Example:
-```bash
-curl -X PUT https://ai-proxy.inet.pp.ua/ai.json.enc \
-  -H "Authorization: Bearer YOUR_CRYPTO_TOKEN" \
-  -H "Content-Type: text/plain" \
-  --data-binary @ai.json.enc
-```
-
-### GET /ai.json
-
-Returns the decrypted configuration. Authentication is performed by decrypting with the provided Bearer token.
+### Embeddings
 
 ```bash
-curl -X GET https://ai-proxy.inet.pp.ua/ai.json \
-  -H "Authorization: Bearer YOUR_CRYPTO_TOKEN"
-```
-
----
-
-## 👥 Multi-User & Multi-Vault Support (NEW in v3.0)
-
-### Overview
-
-The worker now supports multiple users with isolated vaults, enabling secure multi-tenant deployments while maintaining 100% backward compatibility with legacy single-user setups.
-
-### Key Features
-
-- **User Isolation**: Each user has their own encrypted vault
-- **Role-Based Access Control**: Admin and user roles with different permissions
-- **Automatic Migration**: Legacy installations are automatically migrated to multi-user mode
-- **Backward Compatibility**: Existing clients continue to work without modification
-
-### User Management Endpoints
-
-#### GET /v1/auth/me
-
-Returns the current user's context information.
-
-```bash
-curl https://ai-proxy.inet.pp.ua/v1/auth/me \
-  -H "Authorization: Bearer USER_TOKEN"
-```
-
-Response:
-```json
-{
-  "username": "ronan",
-  "vaultId": "vault_ronan",
-  "role": "admin",
-  "isLegacy": false
-}
-```
-
-#### GET /v1/users (Admin only)
-
-List all users with masked credentials.
-
-```bash
-curl https://ai-proxy.inet.pp.ua/v1/users \
-  -H "Authorization: Bearer ADMIN_TOKEN"
-```
-
-Response:
-```json
-{
-  "data": [
-    {
-      "username": "ronan",
-      "owner": "ronan",
-      "vaultId": "vault_ronan",
-      "role": "admin",
-      "keyHint": "***1234"
-    },
-    {
-      "username": "audrey",
-      "owner": "audrey",
-      "vaultId": "vault_audrey",
-      "role": "user",
-      "keyHint": "***5678"
-    }
-  ]
-}
-```
-
-#### POST /v1/users (Admin only)
-
-Create a new user with their own vault.
-
-```bash
-curl -X POST https://ai-proxy.inet.pp.ua/v1/users \
-  -H "Authorization: Bearer ADMIN_TOKEN" \
+curl https://keyaos.<you>.workers.dev/v1/embeddings \
+  -H "Authorization: Bearer YOUR_TOKEN" \
   -H "Content-Type: application/json" \
   -d '{
-    "username": "newuser",
-    "password": "secure_password_123",
-    "role": "user"
+    "model": "openai/text-embedding-3-small",
+    "input": "Hello world"
   }'
 ```
 
-Response:
-```json
-{
-  "ok": true,
-  "username": "newuser",
-  "vaultId": "vault_newuser",
-  "role": "user"
-}
-```
+Works with Cursor, Continue, Cline, aider, LiteLLM, and any tool that supports custom OpenAI or Anthropic base URLs.
 
-### Multi-Vault Architecture
+## 🔌 Supported Providers
 
-#### Vault Storage
+| Provider | Protocol | Pricing Source |
+|----------|----------|----------------|
+| [OpenRouter](https://openrouter.ai) | OpenAI | `usage.cost` from API |
+| [DeepInfra](https://deepinfra.com) | OpenAI | `usage.estimated_cost` from API |
+| [ZenMux](https://zenmux.com) | OpenAI | Token × synced price |
+| [DeepSeek](https://deepseek.com) | OpenAI | Token × synced price |
+| [Google AI Studio](https://aistudio.google.com) | OpenAI | Token × synced price |
+| [xAI](https://x.ai) | OpenAI | Token × synced price |
+| [Moonshot](https://moonshot.cn) | OpenAI | Token × synced price |
+| [OpenAI](https://openai.com) | OpenAI | Token × synced price |
+| [OAIPro](https://oaipro.com) | OpenAI | Token × synced price |
+| [Qwen Code](https://chat.qwen.ai) | OpenAI | Token × synced price |
+| Gemini CLI | Google Gemini | Token × synced price |
+| Antigravity | Google Gemini | Token × synced price |
+| [Kiro](https://kiro.dev) | AWS Event Stream | Token × synced price |
+| Anthropic | Anthropic Messages | Token × synced price |
 
-- **Legacy mode**: Single vault at `vault:ai.json.enc`
-- **Multi-user mode**: Individual vaults at `vault:{vaultId}`
-- **Automatic detection**: The system detects the mode based on D1 metadata
+Adding a new OpenAI-compatible provider takes a single entry in the provider registry.
 
-#### Migration Process
-
-1. **First request**: Automatic migration routine runs
-2. **Legacy detection**: Checks for existing `vault:ai.json.enc`
-3. **User creation**: Creates `admin` user with legacy vault
-4. **Seamless transition**: No downtime or data loss
-
-Migration logs:
-```
-Migration successful: created admin user with legacy vault.
-```
-
-> The D1/R2 switch does not copy data from an old KV namespace automatically.
-> If an earlier deployment already contains users or vaults in KV, export and
-> import that data before removing the old KV binding. A fresh deployment can
-> follow the setup steps above directly.
-
-#### Vault Isolation
-
-Each user's vault is:
-- ✅ Encrypted with their own password
-- ✅ Stored separately in R2
-- ✅ Accessible only with their token
-- ✅ Completely isolated from other users
-
-### Usage Examples
-
-#### Legacy client (unchanged)
-
-```bash
-# Existing clients continue to work without modification
-curl -X POST https://ai-proxy.inet.pp.ua/groq/v1/chat/completions \
-  -H "Authorization: Bearer LEGACY_TOKEN" \
-  -d '{"model": "llama-3.3-70b-versatile", "messages": [...]}'
-```
-
-#### Multi-user client
-
-```bash
-# New clients use the multi-user system
-curl -X POST https://ai-proxy.inet.pp.ua/groq/v1/chat/completions \
-  -H "Authorization: Bearer USER_SPECIFIC_TOKEN" \
-  -d '{"model": "llama-3.3-70b-versatile", "messages": [...]}'
-```
-
-#### Admin operations
-
-```bash
-# Admin can manage all users and vaults
-curl -X POST https://ai-proxy.inet.pp.ua/v1/users \
-  -H "Authorization: Bearer ADMIN_TOKEN" \
-  -d '{"username": "team_member", "password": "secure123", "role": "user"}'
-```
-
-### Role-Based Access Control
-
-| Role | Permissions |
-|------|-------------|
-| **admin** | Full access: create users, modify any vault, access all endpoints |
-| **user** | Limited access: only their own vault, read-only for shared resources |
-
-### Backward Compatibility
-
-**100% compatible with existing deployments:**
-
-- ✅ Legacy tokens continue to work
-- ✅ No configuration changes required
-- ✅ Automatic migration on first request
-- ✅ Rollback possible at any time
-
-### Migration Rollback
-
-If needed, rollback to legacy mode:
-
-```bash
-# 1. Rollback worker version
-wrangler rollback
-
-# 2. Remove users KV (optional)
-wrangler kv:key delete users
-
-# 3. Verify legacy mode
-curl -H "Authorization: Bearer LEGACY_TOKEN" https://worker-url/ai.json
-```
-
----
-
-## 🔄 Forwarding flow
+## ⚙️ Core vs Platform
 
 ```
-Client request
-    ↓
-[Bearer token validation]
-    ↓
-[ai.json.enc decryption] (cached)
-    ↓
-[Provider detection]
-    ↓
-[Provider API key selection] (round-robin)
-    ↓
-[Model ID prefixing for gateway]
-    ↓
-Cloudflare AI Gateway
-    ↓
-Final provider (Groq, SambaNova, etc.)
+Core (self-hosted)           Platform (multi-user)
+├── Credential pool          ├── Everything in Core, plus:
+├── Cost-optimal routing     ├── Clerk authentication
+├── Multi-protocol proxy     ├── Stripe billing & auto top-up
+├── Circuit breaker          ├── Shared credential marketplace
+├── Auto-sync catalog        ├── Gift cards / redemption codes
+├── Embeddings endpoint      └── Admin console & analytics
+├── API key permissions
+└── ADMIN_TOKEN auth
 ```
 
----
+Platform is strictly additive — Core runs independently and never depends on Platform.
 
-## 🛠 Development
+## 🖥 Frontend
 
-### Start local server
+Keyaos ships with a full frontend built with React 19, Vite 7, and Tailwind CSS 4:
 
-```bash
-npm run dev
-# Listens on http://localhost:8787
-# Automatically runs: scripts/embed-config.js -> src/lib/embedded-config.ts
-```
+- **Model catalog** — browsable, searchable listing of all available models with live prices
+- **Provider directory** — per-provider pages with model counts and credential health
+- **OHLC price charts** — financial-grade candlestick charts tracking model price history
+- **Chat UI** — built-in chat interface powered by AI SDK
+- **API reference** — interactive OpenAPI 3.1 documentation via Scalar
+- **MDX docs** — 16 pages of embedded documentation including multimodal guides
+- **Dark mode** — full light / dark / system theme support
+- **i18n** — English and Chinese
 
-### Deploy
+## 🛠 Tech Stack
 
-```bash
-npm run deploy
-```
+| Layer | Technology |
+|-------|-----------|
+| Runtime | Cloudflare Workers |
+| Database | Cloudflare D1 (SQLite) |
+| Scheduler | Cron Triggers (every minute) |
+| Frontend | React 19 · Vite 7 · Tailwind CSS 4 |
+| UI | Radix UI · Headless UI · Framer Motion |
+| Backend | Hono 4 · TypeScript |
+| Auth | Clerk (platform mode) |
+| Payments | Stripe (platform mode) |
+| Charts | Lightweight Charts (OHLC) |
+| Docs | MDX · Scalar (OpenAPI) |
 
-Cloudflare Workers Builds deploys every new commit pushed to the configured
-production branch. For this D1/R2 migration, that branch is
-`feature/d1-r2-storage`.
+## 🤝 Contributing
 
-### Tests
+Contributions are welcome! Whether it's a bug fix, new provider integration, feature request, or documentation improvement — we'd love your help.
 
-```bash
-npm test
-```
+1. **Fork** the repository
+2. **Create** a feature branch (`git checkout -b feat/amazing-feature`)
+3. **Commit** your changes (`git commit -m "feat: add amazing feature"`)
+4. **Push** to the branch (`git push origin feat/amazing-feature`)
+5. **Open** a Pull Request
 
-### Build & embedding
-
-The `scripts/embed-config.js` script runs automatically **before every build/dev**:
-1. Reads `src/config/ai.json.enc` (encrypted binary file)
-2. Converts it to a JSON string
-3. Generates `src/lib/embedded-config.ts` with that content
-4. Imports that content into `src/index.ts`
-5. Wrangler embeds everything into the worker bundle
-
-This process avoids managing file assets at runtime.
-
-Force regeneration:
-```bash
-node scripts/embed-config.js
-```
-
----
-
-## 📝 sample_request.sh examples
-
-The `sample_request.sh` file contains two working examples:
-
-1. **`/openai/v1/chat/completions` route** with `X-Host-Final: api.groq.com`
-2. **`/v1/chat/completions` route** with `X-Host-Final: api.sambanova.ai`
-
-Run the examples:
-
-```bash
-source .dev.vars
-./sample_request.sh
-```
-
-(Replace keys with real user keys in `users.json`)
-
----
-
-## 🔐 ai.json.enc encryption
-
-### Create ai.json.enc
-
-```bash
-# 1. Create ai.json with the AiConfig structure
-cat > ai.json << 'EOF'
-{
-  "version": 1,
-  "providers": { ... }
-}
-EOF
-
-# 2. Encrypt with openssl
-AI_JSON_CRYPTOKEN="your_secret_token"
-openssl enc -aes-256-cbc -a -pbkdf2 -iter 100000 -salt \
-  -in ai.json -out ai.json.enc -pass pass:"$AI_JSON_CRYPTOKEN"
-
-# 3. Copy to src/config/
-cp ai.json.enc src/config/ai.json.enc
-
-# 4. Remove plaintext file
-rm ai.json
-```
-
-### Decrypt (manual)
-
-```bash
-openssl enc -d -aes-256-cbc -a -in ai.json.enc -pass pass:"$AI_JSON_CRYPTOKEN" -out ai.json
-```
-
----
-
-## 📂 Project structure
-
-```
-ai-proxy-cloudflare/
-├── src/
-│   ├── index.ts           # Main Hono app
-│   ├── config/
-│   │   └── ai.json.enc    # Encrypted config (bundled)
-│   └── lib/
-│       ├── ai-enc.ts      # Decryption & helpers
-│       ├── auth.ts        # Bearer token validation
-│       └── gateway.ts     # Forwarding to Cloudflare AI Gateway
-├── wrangler.jsonc         # Cloudflare Workers config
-├── package.json
-├── tsconfig.json
-├── .dev.vars.example
-└── sample_request.sh
-```
-
----
-
-## 🔑 Environment variables
-
-| Var | Source | Description |
-|-----|--------|-------------|
-| `CLOUDFLARE_ACCOUNT_ID` | .dev.vars / Wrangler secret | Your Cloudflare account ID |
-| `AI_JSON_CRYPTOKEN` | .dev.vars / Wrangler secret | Decryption token for ai.json.enc |
-| `CLOUDFLARE_AIG_TOKEN` | .dev.vars / Wrangler secret | Cloudflare AI Gateway token |
-| `DEBUG` | .dev.vars (optional) | `true` for verbose logs |
-
-To deploy in production:
-
-```bash
-wrangler secret put CLOUDFLARE_ACCOUNT_ID
-wrangler secret put AI_JSON_CRYPTOKEN
-wrangler secret put CLOUDFLARE_AIG_TOKEN
-```
-
----
-
-## 🧪 Tests
-
-See `vitest.config.mts` for test configuration.
-
-```bash
-npm test
-```
-
----
-
-## 📜 License
-
-AGPL-3.0-or-later
-
-Copyright © 2024-2026 Ronan LE MEILLAT
+If you're unsure where to start, check out the [open issues](https://github.com/BingoWon/Keyaos/issues) or start a [discussion](https://github.com/BingoWon/Keyaos/discussions). All contributions, big or small, are greatly appreciated.

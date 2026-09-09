@@ -1,0 +1,36 @@
+# Pricing
+
+Keyaos passes through provider pricing with no markup on the base model cost. Platform fees apply only to cross-user routing.
+
+## Routing Fees
+
+Fees depend on how your request is routed:
+
+| Scenario | Your Fee |
+|----------|----------|
+| **Self-use** — request matches your own BYOK credential | **0%** (completely free) |
+| **Cross-user routing** — request is fulfilled by another user's shared credential | **3%** service fee |
+
+**No user is ever charged more than 3% in total.** When you use your own credentials, routing is completely free — even when your credits balance is zero. See [Credits — What Happens When Credits Run Out?](/docs/credits#what-happens-when-credits-run-out) for details.
+
+### How Cross-User Fees Work
+
+When a request is routed through another user's shared credential, each party pays a 3% service fee independently:
+
+- **Consumer pays**: base cost × 1.03
+- **Provider earns**: base cost × 0.97
+
+### Example
+
+A request costs $5.00 at the provider's rate:
+
+| Party | Amount |
+|-------|--------|
+| Consumer charged | $5.15 |
+| Provider earns | $4.85 |
+
+## BYOK — Bring Your Own Key
+
+Add your own API credentials on the [BYOK](/dashboard/byok) page. When a request matches a model your credential supports, it routes directly to the provider — **completely free**, with zero fees.
+
+You can also **share** your credentials (API keys, OAuth tokens, and more) to earn credits when other users route through them. See [Credentials Sharing](/docs/credentials-sharing) for details on pricing strategy and multipliers.

@@ -1,0 +1,91 @@
+{
+	"$schema": "https://biomejs.dev/schemas/2.4.7/schema.json",
+	"files": {
+		"includes": [
+			"src/**",
+			"worker/**",
+			"*.ts",
+			"*.json",
+			"*.html",
+			"*.tsx",
+			"*.js",
+			"*.jsx"
+		],
+		"ignoreUnknown": false
+	},
+	"css": {
+		"parser": {
+			"cssModules": true,
+			"allowWrongLineComments": true,
+			"tailwindDirectives": true
+		}
+	},
+	"vcs": {
+		"enabled": true,
+		"clientKind": "git",
+		"useIgnoreFile": true
+	},
+	"formatter": {
+		"enabled": true,
+		"indentStyle": "tab"
+	},
+	"linter": {
+		"enabled": true,
+		"rules": {
+			"recommended": true
+		}
+	},
+	"javascript": {
+		"formatter": {
+			"quoteStyle": "double"
+		}
+	},
+	"assist": {
+		"enabled": true,
+		"actions": {
+			"source": {
+				"organizeImports": "on"
+			}
+		}
+	},
+	"overrides": [
+		{
+			"includes": ["src/werewolf/**"],
+			"linter": {
+				"rules": {
+					"suspicious": {
+						"noExplicitAny": "off",
+						"noArrayIndexKey": "off",
+						"noAssignInExpressions": "off",
+						"noThenProperty": "off",
+						"noImplicitAnyLet": "off",
+						"noDocumentCookie": "off",
+						"useIterableCallbackReturn": "off"
+					},
+					"correctness": {
+						"useHookAtTopLevel": "off",
+						"useExhaustiveDependencies": "off",
+						"noUnsafeFinally": "off",
+						"noInvalidUseBeforeDeclaration": "off"
+					},
+					"a11y": {
+						"useButtonType": "off",
+						"noSvgWithoutTitle": "off",
+						"useKeyWithClickEvents": "off",
+						"noStaticElementInteractions": "off",
+						"noLabelWithoutControl": "off",
+						"useMediaCaption": "off",
+						"useAriaPropsSupportedByRole": "off"
+					},
+					"style": {
+						"noNonNullAssertion": "off",
+						"noDescendingSpecificity": "off"
+					},
+					"complexity": {
+						"noImportantStyles": "off"
+					}
+				}
+			}
+		}
+	]
+}
