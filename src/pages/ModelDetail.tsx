@@ -9,8 +9,13 @@ import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useTranslation } from "react-i18next";
 import { Link, useParams } from "react-router-dom";
 import type { Modality } from "../../worker/core/db/schema";
+import { useAuth } from "../auth";
 import { CodeSamples, detectCodeVariant } from "../components/CodeSamples";
 import { CopyButton } from "../components/CopyButton";
+import {
+	type AdminChannelSummary,
+	CustomChannelDisclosure,
+} from "../components/CustomChannelDisclosure";
 import { MODALITY_ICON, MODALITY_ORDER } from "../components/Modalities";
 import { OrgLogo } from "../components/OrgLogo";
 import { PriceChart } from "../components/PriceChart";
@@ -26,6 +31,7 @@ import { aggregateModels } from "../utils/models";
 export function ModelDetail() {
 	const { org, model } = useParams<{ org: string; model: string }>();
 	const { t, i18n } = useTranslation();
+	const { isAdmin } = useAuth();
 	const modelId = `${org}/${model}`;
 
 	const { data: rawModels, loading } = useFetch<ModelEntry[]>("/api/models", {
@@ -34,6 +40,10 @@ export function ModelDetail() {
 	const { data: providersData } = useFetch<ProviderMeta[]>("/api/providers", {
 		requireAuth: false,
 	});
+	const { data: adminChannels } = useFetch<AdminChannelSummary[]>(
+		"/api/admin/channels",
+		{ skip: !isAdmin, staleTime: 0 },
+	);
 
 	const group = useMemo(() => {
 		if (!rawModels) return null;
@@ -203,7 +213,7 @@ export function ModelDetail() {
 									}
 								>
 									<td className="py-2.5 pl-4 pr-2 sm:pl-5 whitespace-nowrap">
-										<span className="inline-flex items-center gap-1.5">
+										<span className="inline-flex flex-wrap items-center gap-1.5">
 											<Link to={`/providers/${p.provider_id}`}>
 												<ProviderChip
 													src={meta?.logoUrl ?? ""}
@@ -211,6 +221,14 @@ export function ModelDetail() {
 													size={16}
 												/>
 											</Link>
+											{p.provider_id === "custom" &&
+											isAdmin === true &&
+											adminChannels ? (
+												<CustomChannelDisclosure
+													channels={adminChannels}
+													modelId={group.id}
+												/>
+											) : null}
 											{i === 0 && (
 												<Badge variant="brand">
 													{t("models.best_price", "Best")}

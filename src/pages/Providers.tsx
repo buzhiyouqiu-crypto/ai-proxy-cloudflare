@@ -3,6 +3,10 @@ import { useTranslation } from "react-i18next";
 import { Link, useNavigate } from "react-router-dom";
 import { useAuth } from "../auth";
 import { CopyButton } from "../components/CopyButton";
+import {
+	type AdminChannelSummary,
+	CustomChannelDisclosure,
+} from "../components/CustomChannelDisclosure";
 import { ProviderChip } from "../components/ProviderLogo";
 import { RefreshControl } from "../components/RefreshControl";
 import { SearchBar } from "../components/SearchBar";
@@ -16,70 +20,9 @@ import { useAutoRefresh } from "../hooks/useAutoRefresh";
 import { useFetch } from "../hooks/useFetch";
 import type { ModelEntry } from "../types/model";
 import type { ProviderMeta } from "../types/provider";
-import { formatUSD } from "../utils/format";
 import { aggregateProviders } from "../utils/providers";
 
 const fmtMultiplier = (v: number) => `×${v.toFixed(2)}`;
-
-interface AdminChannelSummary {
-	id: string;
-	name: string;
-	quota: number | null;
-	balance: {
-		remaining: number | null;
-		currency?: string;
-		unit?: string;
-		display?: string;
-	} | null;
-	isEnabled: boolean;
-}
-
-function formatChannelBalance(channel: AdminChannelSummary): string {
-	if (channel.balance?.display) return channel.balance.display;
-	if (channel.quota != null) return formatUSD(channel.quota);
-	if (channel.balance?.remaining != null) {
-		const unit = channel.balance.unit || channel.balance.currency || "";
-		return `${channel.balance.remaining}${unit ? ` ${unit}` : ""}`;
-	}
-	return "待同步";
-}
-
-function CustomChannelPicker({
-	channels,
-}: {
-	channels: AdminChannelSummary[];
-}) {
-	const enabledChannels = channels.filter((channel) => channel.isEnabled);
-	const [selectedId, setSelectedId] = useState(enabledChannels[0]?.id ?? "");
-	const selected =
-		enabledChannels.find((channel) => channel.id === selectedId) ??
-		enabledChannels[0];
-
-	if (!selected) return null;
-
-	return (
-		<div
-			className="flex min-w-0 flex-wrap items-center gap-1.5"
-			onClick={(event) => event.stopPropagation()}
-		>
-			<select
-				value={selected.id}
-				onChange={(event) => setSelectedId(event.target.value)}
-				aria-label="选择自定义渠道"
-				className="max-w-48 rounded-md border border-gray-200 bg-white px-2 py-1 text-xs text-gray-700 focus:border-brand-500 focus:outline-none focus:ring-1 focus:ring-brand-500/20 dark:border-white/10 dark:bg-white/5 dark:text-gray-300"
-			>
-				{enabledChannels.map((channel) => (
-					<option key={channel.id} value={channel.id}>
-						{channel.name} · 剩余 {formatChannelBalance(channel)}
-					</option>
-				))}
-			</select>
-			<span className="text-xs text-gray-500 dark:text-gray-400">
-				剩余 {formatChannelBalance(selected)}
-			</span>
-		</div>
-	);
-}
 
 export function Providers() {
 	const { t } = useTranslation();
@@ -237,7 +180,11 @@ export function Providers() {
 										<tr
 											key={g.provider.id}
 											onClick={(e) => {
-												if ((e.target as HTMLElement).closest("a, button, select"))
+												if (
+													(e.target as HTMLElement).closest(
+														"a, button, select, .custom-channel-disclosure",
+													)
+												)
 													return;
 												navigate(href);
 											}}
@@ -253,11 +200,10 @@ export function Providers() {
 														/>
 													</Link>
 													{g.provider.id === "custom" &&
-														isAdmin &&
-														adminChannels?.filter((channel) => channel.isEnabled)
-															.length ? (
-																<CustomChannelPicker channels={adminChannels} />
-															) : null}
+													isAdmin === true &&
+													adminChannels ? (
+														<CustomChannelDisclosure channels={adminChannels} />
+													) : null}
 												</div>
 											</td>
 											<td className="px-2 py-2.5 whitespace-nowrap">
