@@ -89,9 +89,12 @@ threadsRouter.delete("/:id", async (c) => {
 });
 
 threadsRouter.get("/:id/messages", async (c) => {
+	const ownerId = c.get("owner_id");
 	const threadId = c.req.param("id");
 	const dao = new ThreadsDao(c.env.DB);
-	const messages = await dao.getMessages(threadId);
+	const messages = await dao.getMessages(threadId, ownerId);
+	const thread = await dao.get(threadId, ownerId);
+	if (!thread) return c.json({ error: "Not found" }, 404);
 	return c.json({
 		messages: messages.map((m) => {
 			let parts: unknown[];
@@ -118,6 +121,10 @@ threadsRouter.get("/:id/messages", async (c) => {
 threadsRouter.post("/:id/generate-title", async (c) => {
 	const ownerId = c.get("owner_id");
 	const threadId = c.req.param("id");
+	const dao = new ThreadsDao(c.env.DB);
+	if (!(await dao.get(threadId, ownerId))) {
+		return c.json({ error: "Not found" }, 404);
+	}
 	const body = await c.req.json<{
 		messages: { role: string; content: string }[];
 		model_id?: string;
@@ -192,7 +199,6 @@ threadsRouter.post("/:id/generate-title", async (c) => {
 	c.executionCtx.waitUntil(
 		(async () => {
 			try {
-				const dao = new ThreadsDao(c.env.DB);
 				await dao.updateTitle(threadId, ownerId, title);
 			} catch (err) {
 				log.error("threads", "generate-title: DB save failed", {
@@ -207,6 +213,7 @@ threadsRouter.post("/:id/generate-title", async (c) => {
 });
 
 threadsRouter.post("/:id/messages", async (c) => {
+	const ownerId = c.get("owner_id");
 	const threadId = c.req.param("id");
 	const body = await c.req.json<{
 		messages: { id: string; role: string; parts: unknown; model?: string }[];
@@ -214,16 +221,23 @@ threadsRouter.post("/:id/messages", async (c) => {
 	if (!body.messages?.length)
 		throw new BadRequestError("messages required", "messages_required");
 	const dao = new ThreadsDao(c.env.DB);
+	if (!(await dao.get(threadId, ownerId))) {
+		return c.json({ error: "Not found" }, 404);
+	}
 	const now = Date.now();
 	for (const m of body.messages) {
-		await dao.addMessage({
-			id: m.id,
-			thread_id: threadId,
-			role: m.role,
-			content: JSON.stringify(m.parts),
-			model_id: m.model ?? null,
-			created_at: now,
-		});
+		const inserted = await dao.addMessage(
+			{
+				id: m.id,
+				thread_id: threadId,
+				role: m.role,
+				content: JSON.stringify(m.parts),
+				model_id: m.model ?? null,
+				created_at: now,
+			},
+			ownerId,
+		);
+		if (!inserted) return c.json({ error: "Not found" }, 404);
 	}
 	return c.json({ ok: true });
 });

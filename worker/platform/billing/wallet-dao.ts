@@ -51,12 +51,16 @@ export class WalletDao {
 			.run();
 	}
 
-	async debit(ownerId: string, amount: number): Promise<void> {
-		await this.db
+	async debit(ownerId: string, amount: number): Promise<boolean> {
+		if (!Number.isFinite(amount) || amount <= 0) return false;
+		const result = await this.db
 			.prepare(
-				"UPDATE wallets SET balance = balance - ?, updated_at = ? WHERE owner_id = ?",
+				`UPDATE wallets
+				 SET balance = balance - ?, updated_at = ?
+				 WHERE owner_id = ? AND balance >= ?`,
 			)
-			.bind(amount, Date.now(), ownerId)
+			.bind(amount, Date.now(), ownerId, amount)
 			.run();
+		return (result.meta?.changes ?? 0) > 0;
 	}
 }

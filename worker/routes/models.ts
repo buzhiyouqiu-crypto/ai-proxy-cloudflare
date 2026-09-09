@@ -15,9 +15,34 @@ catalogRouter.get("/", edgeCache(3600), async (c) => {
 	const dao = new CatalogDao(c.env.DB);
 	const rows = await dao.getAllActive();
 	return c.json({
-		data: rows.map(({ is_active, refreshed_at, ...entry }) => entry),
+		data: rows
+			// Custom channel ids and metadata are administrator-owned routing data.
+			// They must not be published through the public remote-sync catalog.
+			.filter((row) => row.provider_id !== "custom")
+			.map(({ is_active, refreshed_at, metadata, ...entry }) => ({
+				...entry,
+				metadata: sanitizeCatalogMetadata(metadata),
+			})),
 	});
 });
+
+function sanitizeCatalogMetadata(raw: string | null): string | null {
+	if (!raw) return null;
+	try {
+		const value = JSON.parse(raw);
+		if (!value || typeof value !== "object" || Array.isArray(value))
+			return null;
+		const {
+			channelId: _channelId,
+			channelName: _channelName,
+			canonicalModelId: _canonicalModelId,
+			...safe
+		} = value as Record<string, unknown>;
+		return JSON.stringify(safe);
+	} catch {
+		return null;
+	}
+}
 
 /** Strip markdown links and bare URLs from model descriptions */
 function cleanDescription(raw: unknown): string | null {
@@ -42,7 +67,11 @@ function cleanDescription(raw: unknown): string | null {
  */
 export const publicModelsRouter = new Hono<AppEnv>();
 
-publicModelsRouter.get("/", edgeCache(3600), async (c) => {
+publicModelsRouter.get("/", async (c) => {
+	// This response is filtered by the authenticated API key's allowed_models.
+	// Never place it in the shared Workers Cache, whose key does not include
+	// Authorization or x-api-key.
+	c.header("Cache-Control", "private, no-store");
 	const dao = new CatalogDao(c.env.DB);
 	const candleDao = new CandleDao(c.env.DB);
 

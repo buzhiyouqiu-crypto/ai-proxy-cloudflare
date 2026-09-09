@@ -5,7 +5,7 @@ import {
 } from "ai";
 import { Hono } from "hono";
 import { ThreadsDao } from "../core/db/threads-dao";
-import { BadRequestError } from "../shared/errors";
+import { ApiError, BadRequestError } from "../shared/errors";
 import { log } from "../shared/logger";
 import type { AppEnv } from "../shared/types";
 import { executeCompletion } from "./gateway";
@@ -25,6 +25,23 @@ assistantRouter.post("/", async (c) => {
 	const system = body.system as string | undefined;
 	const threadId = (body.id ?? body.threadId) as string | undefined;
 	const providerIds = body.provider_ids as string[] | undefined;
+	const ownerId = c.get("owner_id");
+
+	// A client may submit a thread id, but it must belong to the current
+	// account. This check must happen before dispatching to an upstream model;
+	// otherwise an attacker could attach generated messages to another user's
+	// thread by guessing or obtaining its id.
+	if (threadId) {
+		const thread = await new ThreadsDao(c.env.DB).get(threadId, ownerId);
+		if (!thread) {
+			throw new ApiError(
+				"Thread not found",
+				404,
+				"not_found",
+				"thread_not_found",
+			);
+		}
+	}
 
 	if (!modelId)
 		throw new BadRequestError("model_id is required", "model_required");
@@ -76,7 +93,6 @@ assistantRouter.post("/", async (c) => {
 		threadId,
 	});
 
-	const ownerId = c.get("owner_id");
 	const partId = crypto.randomUUID();
 	let fullResponseText = "";
 
@@ -154,25 +170,31 @@ assistantRouter.post("/", async (c) => {
 						try {
 							const dao = new ThreadsDao(c.env.DB);
 							if (lastUserMsg?.role === "user") {
-								await dao.addMessage({
-									id: lastUserMsg.id || `msg_${crypto.randomUUID()}`,
-									thread_id: threadId,
-									role: "user",
-									content: JSON.stringify(lastUserMsg.parts ?? []),
-									model_id: null,
-									created_at: Date.now(),
-								});
+								await dao.addMessage(
+									{
+										id: lastUserMsg.id || `msg_${crypto.randomUUID()}`,
+										thread_id: threadId,
+										role: "user",
+										content: JSON.stringify(lastUserMsg.parts ?? []),
+										model_id: null,
+										created_at: Date.now(),
+									},
+									ownerId,
+								);
 							}
-							await dao.addMessage({
-								id: `msg_${crypto.randomUUID()}`,
-								thread_id: threadId,
-								role: "assistant",
-								content: JSON.stringify([
-									{ type: "text", text: fullResponseText },
-								]),
-								model_id: modelId,
-								created_at: Date.now(),
-							});
+							await dao.addMessage(
+								{
+									id: `msg_${crypto.randomUUID()}`,
+									thread_id: threadId,
+									role: "assistant",
+									content: JSON.stringify([
+										{ type: "text", text: fullResponseText },
+									]),
+									model_id: modelId,
+									created_at: Date.now(),
+								},
+								ownerId,
+							);
 							if (modelId) await dao.updateModel(threadId, ownerId, modelId);
 						} catch (err) {
 							log.error("assistant", "Failed to save messages", {

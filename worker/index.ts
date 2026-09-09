@@ -77,6 +77,22 @@ app.use(
 	}),
 );
 
+// Baseline response hardening. These headers are safe for the SPA and API
+// responses and prevent MIME sniffing, referrer leakage, and unnecessary
+// browser capability exposure.
+app.use("*", async (c, next) => {
+	await next();
+	c.header("X-Content-Type-Options", "nosniff");
+	c.header("Referrer-Policy", "strict-origin-when-cross-origin");
+	c.header("Permissions-Policy", "camera=(), microphone=(), geolocation=()");
+	if (new URL(c.req.url).protocol === "https:") {
+		c.header(
+			"Strict-Transport-Security",
+			"max-age=31536000; includeSubDomains",
+		);
+	}
+});
+
 app.get("/health", (c) => c.json({ status: "ok" }));
 
 // ─── Auth: Management API (/api/*) ─────────────────────
@@ -84,7 +100,7 @@ app.use("/api/*", async (c, next) => {
 	if (c.req.path.startsWith("/api/webhooks/")) return next();
 	if (
 		c.req.method === "GET" &&
-		(c.req.path === "/api/providers" ||
+		((c.req.path === "/api/providers" && c.req.query("all") !== "1") ||
 			c.req.path === "/api/models" ||
 			c.req.path === "/api/catalog" ||
 			c.req.path.startsWith("/api/sparklines/") ||

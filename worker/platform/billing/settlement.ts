@@ -34,6 +34,11 @@ export async function settleWallets(
 ): Promise<void> {
 	if (settlement.consumerCharged <= 0) return;
 	const wallets = new WalletDao(db);
-	await wallets.debit(consumerId, settlement.consumerCharged);
+	const debited = await wallets.debit(consumerId, settlement.consumerCharged);
+	if (!debited) {
+		// Do not credit the provider when the consumer balance was exhausted
+		// between the pre-dispatch check and usage settlement.
+		throw new Error("Insufficient wallet balance for settlement");
+	}
 	await wallets.credit(credentialOwnerId, settlement.providerEarned);
 }

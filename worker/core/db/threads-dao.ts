@@ -76,28 +76,52 @@ export class ThreadsDao {
 
 	async delete(id: string, ownerId: string): Promise<void> {
 		await this.db.batch([
-			this.db.prepare("DELETE FROM chat_messages WHERE thread_id = ?").bind(id),
+			// Scope the message deletion to the owning thread. The old query deleted
+			// messages first and only checked the owner on the thread row, which let
+			// any authenticated user who knew a thread id erase its messages.
+			this.db
+				.prepare(
+					`DELETE FROM chat_messages
+					 WHERE thread_id = ?
+					   AND EXISTS (
+						 SELECT 1 FROM chat_threads
+						 WHERE chat_threads.id = ? AND chat_threads.owner_id = ?
+					   )`,
+				)
+				.bind(id, id, ownerId),
 			this.db
 				.prepare("DELETE FROM chat_threads WHERE id = ? AND owner_id = ?")
 				.bind(id, ownerId),
 		]);
 	}
 
-	async getMessages(threadId: string): Promise<DbChatMessage[]> {
+	async getMessages(
+		threadId: string,
+		ownerId: string,
+	): Promise<DbChatMessage[]> {
 		const { results } = await this.db
 			.prepare(
-				"SELECT * FROM chat_messages WHERE thread_id = ? ORDER BY created_at ASC",
+				`SELECT m.* FROM chat_messages m
+				 JOIN chat_threads t ON t.id = m.thread_id
+				 WHERE m.thread_id = ? AND t.owner_id = ?
+				 ORDER BY m.created_at ASC`,
 			)
-			.bind(threadId)
+			.bind(threadId, ownerId)
 			.all<DbChatMessage>();
 		return results;
 	}
 
-	async addMessage(message: DbChatMessage): Promise<void> {
-		await this.db.batch([
+	async addMessage(message: DbChatMessage, ownerId: string): Promise<boolean> {
+		const results = await this.db.batch([
 			this.db
 				.prepare(
-					"INSERT INTO chat_messages (id, thread_id, role, content, model_id, created_at) VALUES (?, ?, ?, ?, ?, ?)",
+					`INSERT INTO chat_messages
+					 (id, thread_id, role, content, model_id, created_at)
+					 SELECT ?, ?, ?, ?, ?, ?
+					 WHERE EXISTS (
+						 SELECT 1 FROM chat_threads
+						 WHERE chat_threads.id = ? AND chat_threads.owner_id = ?
+					 )`,
 				)
 				.bind(
 					message.id,
@@ -106,10 +130,15 @@ export class ThreadsDao {
 					message.content,
 					message.model_id,
 					message.created_at,
+					message.thread_id,
+					ownerId,
 				),
 			this.db
-				.prepare("UPDATE chat_threads SET updated_at = ? WHERE id = ?")
-				.bind(Date.now(), message.thread_id),
+				.prepare(
+					"UPDATE chat_threads SET updated_at = ? WHERE id = ? AND owner_id = ?",
+				)
+				.bind(Date.now(), message.thread_id, ownerId),
 		]);
+		return (results[0]?.meta?.changes ?? 0) > 0;
 	}
 }

@@ -146,18 +146,20 @@ export class AdminDao {
 	): Promise<void> {
 		const id = `adj_${crypto.randomUUID().replace(/-/g, "").slice(0, 16)}`;
 
+		if (amount > 0) {
+			await this.wallet.credit(ownerId, amount);
+		} else if (amount < 0) {
+			const debited = await this.wallet.debit(ownerId, -amount);
+			if (!debited)
+				throw new Error("Insufficient wallet balance for adjustment");
+		}
+
 		await this.db
 			.prepare(
 				"INSERT INTO credit_adjustments (id, owner_id, amount, reason, created_at) VALUES (?, ?, ?, ?, ?)",
 			)
 			.bind(id, ownerId, amount, reason, Date.now())
 			.run();
-
-		if (amount > 0) {
-			await this.wallet.credit(ownerId, amount);
-		} else if (amount < 0) {
-			await this.wallet.debit(ownerId, -amount);
-		}
 	}
 
 	async getAdjustments(
