@@ -318,6 +318,34 @@ const PROVIDER_CONFIGS: OpenAICompatibleConfig[] = [
 		},
 	},
 	{
+		id: "minimax",
+		name: "MiniMax",
+		logoUrl: "https://www.minimaxi.com/favicon.ico",
+		// MiniMax mainland OpenAI-compatible endpoint.
+		baseUrl: "https://api.minimax.cn/v1",
+		currency: "USD",
+		// Token Plan keys are subscription-style quotas rather than a
+		// monetary balance that KeyLoom can safely deduct in USD.
+		supportsAutoCredits: false,
+		isSubscription: true,
+		staticModels: true,
+		stripModelPrefix: true,
+		systemKeyEnvVar: "MINIMAX_KEY",
+		mapModelId: (id) => {
+			const slug = id.toLowerCase().replace(/^minimax\//, "");
+			return `minimax/${slug}`;
+		},
+		parseModels: () =>
+			parseStaticModels("minimax", [
+				{ id: "minimax/minimax-m3", upstream_model_id: "MiniMax-M3" },
+				{ id: "minimax/minimax-m2.7", upstream_model_id: "MiniMax-M2.7" },
+				{ id: "minimax/minimax-m2.5", upstream_model_id: "MiniMax-M2.5" },
+			]),
+		credentialGuide: {
+			placeholder: "MiniMax API Key（sk-...）",
+		},
+	},
+	{
 		id: "google-ai-studio",
 		name: "Google AI Studio",
 		logoUrl: "https://www.gstatic.com/aistudio/ai_studio_favicon_2_128x128.png",

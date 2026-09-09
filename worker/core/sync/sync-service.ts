@@ -201,11 +201,44 @@ export async function syncFromRemote(db: D1Database): Promise<void> {
 	}
 
 	const body = (await res.json()) as { data?: ParsedModel[] };
-	const entries = body.data;
-	if (!Array.isArray(entries) || entries.length === 0) {
+	const remoteEntries = body.data;
+	if (!Array.isArray(remoteEntries) || remoteEntries.length === 0) {
 		log.warn("sync", "Catalog returned 0 entries, skipping");
 		return;
 	}
+
+	// The remote Keyaos catalog may lag behind providers that are added by this
+	// self-hosted deployment. Keep MiniMax available using the canonical
+	// OpenRouter pricing already present in the remote catalog. The provider
+	// adapter still forwards the original MiniMax model ID upstream.
+	const canonicalModels = new Map(
+		remoteEntries
+			.filter((entry) => entry.provider_id === "openrouter")
+			.map((entry) => [entry.model_id, entry]),
+	);
+	const minimaxProvider = getProvider("minimax");
+	const minimaxEntries = minimaxProvider
+		? (await minimaxProvider.fetchModels()).flatMap((entry) => {
+			const canonical = canonicalModels.get(entry.model_id);
+			if (!canonical) return [];
+			return [
+				{
+					...entry,
+					name: canonical.name ?? entry.name,
+					input_price: canonical.input_price,
+					output_price: canonical.output_price,
+					context_length: canonical.context_length ?? entry.context_length,
+					input_modalities:
+						canonical.input_modalities ?? entry.input_modalities,
+					output_modalities:
+						canonical.output_modalities ?? entry.output_modalities,
+					created: canonical.created,
+					metadata: canonical.metadata,
+				},
+			];
+		})
+		: [];
+	const entries = [...remoteEntries, ...minimaxEntries];
 
 	const dao = new CatalogDao(db);
 	await dao.upsert(entries);

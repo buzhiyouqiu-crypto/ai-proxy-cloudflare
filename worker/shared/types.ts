@@ -11,6 +11,7 @@ export type Env = {
 	ASSETS?: Fetcher;
 	/** System-level API keys for dynamic model sync (provider /models endpoints) */
 	DEEPSEEK_KEY?: string;
+	MINIMAX_KEY?: string;
 	OPENAI_KEY?: string;
 	GEMINI_KEY?: string;
 	ANTHROPIC_KEY?: string;
