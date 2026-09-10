@@ -39,6 +39,18 @@ function readImagePrice(metadata: string | null): number | null {
 	}
 }
 
+function readCustomChannelId(metadata: string | null): string | null {
+	if (!metadata) return null;
+	try {
+		const value = JSON.parse(metadata) as { channelId?: unknown };
+		return typeof value.channelId === "string" && value.channelId
+			? value.channelId
+			: null;
+	} catch {
+		return null;
+	}
+}
+
 /**
  * Returns all viable provider+credential candidates for a model, sorted by effective cost.
  * Offerings are sorted by input_price ASC from DB; within each offering,
@@ -75,11 +87,25 @@ export async function dispatchAll(
 			offering.provider_id,
 			ownerId,
 		);
+		const customChannelId =
+			offering.provider_id === "custom"
+				? readCustomChannelId(offering.metadata)
+				: null;
+		if (customChannelId) {
+			credentials = credentials.filter(
+				(credential) => credential.id === customChannelId,
+			);
+		}
 
 		// Fallback: if no healthy credentials, try unhealthy ones (dead/cooldown).
 		// A degraded attempt is better than a guaranteed 503.
 		if (credentials.length === 0) {
 			credentials = await credDao.selectFallback(offering.provider_id, ownerId);
+			if (customChannelId) {
+				credentials = credentials.filter(
+					(credential) => credential.id === customChannelId,
+				);
+			}
 		}
 
 		for (const credential of credentials) {

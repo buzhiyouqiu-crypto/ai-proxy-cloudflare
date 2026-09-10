@@ -1,7 +1,12 @@
 import { useEffect, useMemo } from "react";
 import { useTranslation } from "react-i18next";
 import { Link, useNavigate, useParams } from "react-router-dom";
+import { useAuth } from "../auth";
 import { CopyButton } from "../components/CopyButton";
+import {
+	type AdminChannelSummary,
+	CustomChannelDisclosure,
+} from "../components/CustomChannelDisclosure";
 import { ModalityCell } from "../components/Modalities";
 import { OrgLogo } from "../components/OrgLogo";
 import { PriceChart } from "../components/PriceChart";
@@ -17,6 +22,7 @@ export function ProviderDetail() {
 	const { providerId } = useParams<{ providerId: string }>();
 	const { t } = useTranslation();
 	const navigate = useNavigate();
+	const { isAdmin } = useAuth();
 
 	const { data: models, loading: modelsLoading } = useFetch<ModelEntry[]>(
 		"/api/models",
@@ -25,6 +31,10 @@ export function ProviderDetail() {
 	const { data: providersData, loading: providersLoading } = useFetch<
 		ProviderMeta[]
 	>("/api/providers", { requireAuth: false });
+	const { data: adminChannels } = useFetch<AdminChannelSummary[]>(
+		"/api/admin/channels",
+		{ skip: !isAdmin, staleTime: 0 },
+	);
 
 	const group = useMemo(() => {
 		if (!models || !providersData) return null;
@@ -146,13 +156,21 @@ export function ProviderDetail() {
 									className="even:bg-gray-50/50 hover:bg-gray-100/60 dark:even:bg-white/[0.015] dark:hover:bg-white/[0.04] transition-colors cursor-pointer"
 								>
 									<td className="py-2.5 pl-4 pr-2 sm:pl-5">
-										<Link
-											to={modelPath}
-											className="inline-flex items-center gap-2 text-sm text-gray-900 hover:text-brand-600 dark:text-white dark:hover:text-brand-400 transition-colors whitespace-nowrap"
-										>
-											<OrgLogo modelId={m.id} />
-											<span className="font-medium">{m.name}</span>
-										</Link>
+											<Link
+												to={modelPath}
+												className="inline-flex items-center gap-2 text-sm text-gray-900 hover:text-brand-600 dark:text-white dark:hover:text-brand-400 transition-colors whitespace-nowrap"
+											>
+												<OrgLogo modelId={m.id} />
+												<span className="font-medium">{m.name}</span>
+											</Link>
+											{providerId === "custom" &&
+												isAdmin === true &&
+												adminChannels ? (
+													<CustomChannelDisclosure
+														channels={adminChannels}
+														modelId={m.id}
+													/>
+											) : null}
 										<div className="mt-0.5 flex items-center gap-1">
 											<code className="text-[11px] font-mono text-gray-400 dark:text-gray-500">
 												{m.id}

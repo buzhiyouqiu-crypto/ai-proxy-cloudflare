@@ -60,14 +60,27 @@ export function aggregateModels(entries: ModelEntry[]): ModelGroup[] {
 		if (e.created && (!group.createdAt || e.created < group.createdAt)) {
 			group.createdAt = e.created;
 		}
-		group.providers.push({
+		const provider = {
 			provider_id: e.provider_id,
 			inputPrice: e.input_price ?? 0,
 			outputPrice: e.output_price ?? 0,
 			platformInputPrice: e.platform_input_price,
 			platformOutputPrice: e.platform_output_price,
 			contextLength: e.context_length ?? 0,
-		});
+		};
+		const existing = group.providers.find(
+			(item) => item.provider_id === provider.provider_id,
+		);
+		if (!existing) {
+			group.providers.push(provider);
+		} else if (
+			provider.inputPrice < existing.inputPrice ||
+			(provider.inputPrice === existing.inputPrice &&
+				provider.outputPrice < existing.outputPrice)
+		) {
+			const index = group.providers.indexOf(existing);
+			group.providers[index] = provider;
+		}
 	}
 
 	for (const g of groups.values()) {

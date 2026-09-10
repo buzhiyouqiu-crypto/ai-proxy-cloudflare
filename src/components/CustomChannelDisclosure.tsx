@@ -49,10 +49,9 @@ export function CustomChannelDisclosure({
 	);
 	const visibleChannels = useMemo(() => {
 		if (!modelId) return enabledChannels;
-		const matches = enabledChannels.filter((channel) =>
+		return enabledChannels.filter((channel) =>
 			channelOffersModel(channel, modelId),
 		);
-		return matches.length > 0 ? matches : enabledChannels;
 	}, [enabledChannels, modelId]);
 
 	if (visibleChannels.length === 0) return null;

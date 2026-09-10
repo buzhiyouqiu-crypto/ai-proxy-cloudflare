@@ -36,7 +36,7 @@ export function aggregateProviders(
 			group = { provider: meta, models: [] };
 			byProvider.set(m.provider_id, group);
 		}
-		group.models.push({
+		const model = {
 			id: m.id,
 			name: m.name ?? m.id,
 			inputPrice: m.input_price ?? 0,
@@ -46,7 +46,18 @@ export function aggregateProviders(
 			contextLength: m.context_length ?? 0,
 			inputModalities: m.input_modalities ?? ["text"],
 			outputModalities: m.output_modalities ?? ["text"],
-		});
+		};
+		const existing = group.models.find((item) => item.id === model.id);
+		if (!existing) {
+			group.models.push(model);
+		} else if (
+			model.inputPrice < existing.inputPrice ||
+			(model.inputPrice === existing.inputPrice &&
+				model.outputPrice < existing.outputPrice)
+		) {
+			const index = group.models.indexOf(existing);
+			group.models[index] = model;
+		}
 	}
 
 	for (const g of byProvider.values()) {
