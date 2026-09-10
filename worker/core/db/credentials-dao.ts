@@ -204,16 +204,18 @@ export class CredentialsDao {
 		params: {
 			metadata: Record<string, unknown>;
 			secret?: string;
+			clearSecret?: boolean;
 			isEnabled: number;
 			priceMultiplier: number;
 			quotaSource?: "auto" | null;
 		},
 	): Promise<void> {
 		const metadata = JSON.stringify(params.metadata);
-		if (params.secret) {
+		if (params.clearSecret || params.secret) {
+			const secret = params.clearSecret ? "" : params.secret ?? "";
 			const [encryptedSecret, secretHash] = await Promise.all([
-				encrypt(params.secret, this.encryptionKey),
-				sha256(params.secret),
+				encrypt(secret, this.encryptionKey),
+				sha256(secret),
 			]);
 			await this.db
 				.prepare(
@@ -225,7 +227,7 @@ export class CredentialsDao {
 				.bind(
 					encryptedSecret,
 					secretHash,
-					briefHint(params.secret),
+					briefHint(secret),
 					metadata,
 					params.isEnabled,
 					params.priceMultiplier,

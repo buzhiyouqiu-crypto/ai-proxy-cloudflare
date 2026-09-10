@@ -24,6 +24,8 @@ export interface CustomChannelMetadata {
 	name: string;
 	baseUrl: string;
 	models: CustomChannelModel[];
+	/** Defaults to true for channels created before this field existed. */
+	requiresApiKey?: boolean;
 	websiteUrl?: string | null;
 	defaultInputPrice?: number;
 	defaultOutputPrice?: number;
@@ -43,7 +45,10 @@ export function parseCustomChannelMetadata(
 			!Array.isArray(value.models)
 		)
 			return null;
-		return value as CustomChannelMetadata;
+		return {
+			...(value as CustomChannelMetadata),
+			requiresApiKey: value.requiresApiKey !== false,
+		};
 	} catch {
 		return null;
 	}
@@ -80,8 +85,16 @@ function parseExtractorRequest(code: string, secret: string): ExtractorRequest |
 	for (const match of headerBlock.matchAll(pairPattern)) {
 		headers[match[1]] = replaceSecret(match[2], secret);
 	}
-	if (!Object.keys(headers).some((key) => key.toLowerCase() === "authorization")) {
+	if (
+		secret &&
+		!Object.keys(headers).some((key) => key.toLowerCase() === "authorization")
+	) {
 		headers.Authorization = `Bearer ${secret}`;
+	}
+	if (!secret) {
+		for (const [key, value] of Object.entries(headers)) {
+			if (!value || /^Bearer\s*$/i.test(value.trim())) delete headers[key];
+		}
 	}
 	return { url: replaceSecret(url, secret), method: method.toUpperCase(), headers };
 }
@@ -501,14 +514,17 @@ export class CustomOpenAICompatibleAdapter implements ProviderAdapter {
 		body: Record<string, unknown>,
 		endpoint: "chat/completions" | "embeddings" | "images/generations",
 	): Promise<Response> {
+		const requestHeaders: Record<string, string> = {
+			"Content-Type": "application/json",
+		};
+		if (this.channel.requiresApiKey !== false && secret) {
+			requestHeaders.Authorization = `Bearer ${secret}`;
+		}
 		const upstreamResponse = await fetch(
 			`${normalizeBaseUrl(this.channel.baseUrl)}/${endpoint}`,
 			{
 				method: "POST",
-				headers: {
-					"Content-Type": "application/json",
-					Authorization: `Bearer ${secret}`,
-				},
+				headers: requestHeaders,
 				body: JSON.stringify(body),
 			},
 		);
@@ -527,11 +543,15 @@ export class CustomOpenAICompatibleAdapter implements ProviderAdapter {
 	}
 
 	private async forwardForm(secret: string, body: FormData): Promise<Response> {
+		const requestHeaders: Record<string, string> = {};
+		if (this.channel.requiresApiKey !== false && secret) {
+			requestHeaders.Authorization = `Bearer ${secret}`;
+		}
 		const upstreamResponse = await fetch(
 			`${normalizeBaseUrl(this.channel.baseUrl)}/images/edits`,
 			{
 				method: "POST",
-				headers: { Authorization: `Bearer ${secret}` },
+				headers: requestHeaders,
 				body,
 			},
 		);

@@ -19,6 +19,7 @@ import credentialsRouter from "./routes/credentials";
 import embeddingsRouter from "./routes/embeddings";
 import imagesRouter from "./routes/images";
 import messagesRouter from "./routes/messages";
+import responsesRouter from "./routes/responses";
 import {
 	catalogRouter,
 	dashboardModelsRouter,
@@ -96,6 +97,7 @@ function requestBodyLimit(path: string): number {
 		path === "/v1/chat/completions" ||
 		path === "/v1/messages" ||
 		path === "/v1/embeddings" ||
+		path === "/v1/responses" ||
 		path.startsWith("/v1/images/")
 		? CHAT_BODY_LIMIT
 		: DEFAULT_BODY_LIMIT;
@@ -304,6 +306,7 @@ app.route("/v1/chat", chatRouter);
 app.route("/v1/embeddings", embeddingsRouter);
 app.route("/v1/images", imagesRouter);
 app.route("/v1/models", publicModelsRouter);
+app.route("/v1/responses", responsesRouter);
 
 app.get("/v1/credits", async (c) => {
 	const { WalletDao } = await import("./platform/billing/wallet-dao");

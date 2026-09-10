@@ -46,7 +46,8 @@ const CustomChannelInput = z.object({
 	name: z.string().trim().min(1).max(100),
 	baseUrl: z.string().trim().url(),
 	websiteUrl: z.string().trim().url().nullable().optional(),
-	secret: z.string().trim().min(1).max(1000),
+	secret: z.string().trim().max(1000).optional(),
+	requiresApiKey: z.boolean().optional(),
 	models: z.array(CustomModelInput).min(1).max(100),
 	defaultInputPrice: z.number().min(0).max(1_000_000).optional(),
 	defaultOutputPrice: z.number().min(0).max(1_000_000).optional(),
@@ -63,13 +64,14 @@ const CustomChannelUpdateInput = CustomChannelInput.partial().extend({
 const DiscoverModelsInput = z.object({
 	baseUrl: z.string().trim().url(),
 	secret: z.string().trim().max(1000).optional(),
+	requiresApiKey: z.boolean().optional(),
 	channelId: z.string().trim().min(1).optional(),
 	inputPrice: z.number().min(0).max(1_000_000).default(0),
 	outputPrice: z.number().min(0).max(1_000_000).default(0),
 });
 
 const TestExtractorInput = z.object({
-	secret: z.string().trim().min(1).max(1000),
+	secret: z.string().trim().max(1000).optional(),
 	extractorCode: z.string().trim().min(1).max(20_000),
 });
 
@@ -306,6 +308,7 @@ admin.get("/channels", async (c) => {
 					id: row.id,
 					name: channel?.name ?? "自定义渠道",
 					baseUrl: channel?.baseUrl ?? "",
+					requiresApiKey: channel?.requiresApiKey !== false,
 					websiteUrl: channel?.websiteUrl ?? null,
 					models: channel?.models ?? [],
 					defaultInputPrice: channel?.defaultInputPrice ?? 0,
@@ -491,7 +494,8 @@ admin.post("/channels/discover-models", async (c) => {
 			throw new BadRequestError("Invalid JSON body", "invalid_json");
 		}),
 	);
-	let secret = body.secret;
+	let secret = body.secret ?? "";
+	let requiresApiKey = body.requiresApiKey !== false;
 	if (!secret && body.channelId) {
 		const row = await c.env.DB.prepare(
 			"SELECT * FROM upstream_credentials WHERE id = ? AND provider_id = 'custom'",
@@ -499,9 +503,14 @@ admin.post("/channels/discover-models", async (c) => {
 			.bind(body.channelId)
 			.first<DbCredential>();
 		if (!row) throw new BadRequestError("Channel not found", "credential_not_found");
+		const channel = parseCustomChannelMetadata(row.metadata);
+		requiresApiKey =
+			body.requiresApiKey === undefined
+				? channel?.requiresApiKey !== false
+				: body.requiresApiKey;
 		secret = await new CredentialsDao(c.env.DB, c.env.ENCRYPTION_KEY).decryptSecret(row);
 	}
-	if (!secret) {
+	if (requiresApiKey && !secret) {
 		throw new BadRequestError(
 			"An upstream API key is required to discover models",
 			"upstream_key_required",
@@ -510,11 +519,10 @@ admin.post("/channels/discover-models", async (c) => {
 	let lastStatus = 0;
 	for (const modelsUrl of modelEndpointCandidates(body.baseUrl)) {
 		try {
+			const headers: Record<string, string> = { Accept: "application/json" };
+			if (requiresApiKey && secret) headers.Authorization = `Bearer ${secret}`;
 			const response = await fetch(modelsUrl, {
-					headers: {
-						Accept: "application/json",
-						Authorization: `Bearer ${secret}`,
-				},
+				headers,
 			});
 			lastStatus = response.status;
 			if (!response.ok) continue;
@@ -547,7 +555,7 @@ admin.post("/channels/test-extractor", async (c) => {
 			throw new BadRequestError("Invalid JSON body", "invalid_json");
 		}),
 	);
-	const credits = await testCustomExtractor(body.extractorCode, body.secret);
+	const credits = await testCustomExtractor(body.extractorCode, body.secret ?? "");
 	if (!credits) {
 		throw new BadRequestError(
 			"The extractor did not return a readable balance",
@@ -609,6 +617,14 @@ admin.post("/channels", async (c) => {
 			throw new BadRequestError("Invalid JSON body", "invalid_json");
 		}),
 	);
+	const secret = body.secret ?? "";
+	const requiresApiKey = body.requiresApiKey !== false;
+	if (requiresApiKey && !secret) {
+		throw new BadRequestError(
+			"请填写上游 API Key，或勾选上游不需要 API Key",
+			"upstream_key_required",
+		);
+	}
 
 	const url = new URL(body.baseUrl);
 	if (url.protocol !== "http:" && url.protocol !== "https:") {
@@ -619,6 +635,7 @@ admin.post("/channels", async (c) => {
 		type: "custom_openai" as const,
 		name: body.name,
 		baseUrl: body.baseUrl.replace(/\/+$/, ""),
+		requiresApiKey,
 		models: body.models,
 		websiteUrl: body.websiteUrl ?? null,
 		defaultInputPrice: body.defaultInputPrice ?? 0,
@@ -626,14 +643,14 @@ admin.post("/channels", async (c) => {
 		extractorCode: body.extractorCode?.trim() || null,
 	};
 	const dao = new CredentialsDao(c.env.DB, c.env.ENCRYPTION_KEY);
-	if (await dao.existsBySecretHash(body.secret)) {
+	if (secret && (await dao.existsBySecretHash(secret))) {
 		throw new BadRequestError("This upstream key is already configured", "credential_duplicate");
 	}
 
 	const credential = await dao.add({
 		owner_id: c.get("owner_id"),
 		provider_id: "custom",
-		secret: body.secret,
+		secret,
 		quota: null,
 		quotaSource: metadata.extractorCode ? "auto" : null,
 		isEnabled: body.isEnabled === false ? 0 : 1,
@@ -705,6 +722,7 @@ admin.patch("/channels/:id", async (c) => {
 		"baseUrl",
 		"websiteUrl",
 		"secret",
+		"requiresApiKey",
 		"models",
 		"defaultInputPrice",
 		"defaultOutputPrice",
@@ -732,6 +750,8 @@ admin.patch("/channels/:id", async (c) => {
 			...current,
 			name: body.name ?? current.name,
 			baseUrl: body.baseUrl?.replace(/\/+$/, "") ?? current.baseUrl,
+			requiresApiKey:
+				body.requiresApiKey ?? current.requiresApiKey !== false,
 			websiteUrl: body.websiteUrl === undefined ? current.websiteUrl ?? null : body.websiteUrl,
 			models: body.models ?? current.models,
 			defaultInputPrice: body.defaultInputPrice ?? current.defaultInputPrice ?? 0,
@@ -745,9 +765,16 @@ admin.patch("/channels/:id", async (c) => {
 		if (url.protocol !== "http:" && url.protocol !== "https:") {
 			throw new BadRequestError("baseUrl must use http or https", "invalid_url");
 		}
+		if (metadata.requiresApiKey && current.requiresApiKey === false && !body.secret?.trim()) {
+			throw new BadRequestError(
+				"请填写上游 API Key，或勾选上游不需要 API Key",
+				"upstream_key_required",
+			);
+		}
 		await new CredentialsDao(c.env.DB, c.env.ENCRYPTION_KEY).updateCustomChannel(id, {
 			metadata,
 			secret: body.secret,
+			clearSecret: metadata.requiresApiKey === false,
 			isEnabled: body.isEnabled == null ? row.is_enabled : body.isEnabled ? 1 : 0,
 			priceMultiplier: body.priceMultiplier ?? row.price_multiplier,
 			quotaSource: metadata.extractorCode ? "auto" : null,

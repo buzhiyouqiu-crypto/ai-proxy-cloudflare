@@ -32,6 +32,7 @@ interface Channel {
 	id: string;
 	name: string;
 	baseUrl: string;
+	requiresApiKey: boolean;
 	websiteUrl?: string | null;
 	models: ChannelModel[];
 	defaultInputPrice: number;
@@ -57,6 +58,7 @@ interface Channel {
 const createInitialForm = () => ({
 	name: "",
 	baseUrl: "",
+	requiresApiKey: true,
 	websiteUrl: "",
 	secret: "",
 	defaultInputPrice: "0",
@@ -125,6 +127,7 @@ export function Channels() {
 		setForm({
 			name: channel.name,
 			baseUrl: channel.baseUrl,
+			requiresApiKey: channel.requiresApiKey !== false,
 			websiteUrl: channel.websiteUrl ?? "",
 			secret: "",
 			defaultInputPrice: String(channel.defaultInputPrice),
@@ -141,7 +144,7 @@ export function Channels() {
 		setSaving(true);
 		try {
 			if (form.models.length === 0) throw new Error("请至少添加一个模型");
-			if (!editingId && !form.secret.trim()) {
+			if (form.requiresApiKey && !editingId && !form.secret.trim()) {
 				throw new Error("请填写上游 API Key");
 			}
 			const models = form.models.map((model, index) => {
@@ -166,6 +169,7 @@ export function Channels() {
 			const payload: Record<string, unknown> = {
 				name: form.name,
 				baseUrl: form.baseUrl,
+				requiresApiKey: form.requiresApiKey,
 				websiteUrl: form.websiteUrl || null,
 				models,
 				defaultInputPrice: Number(form.defaultInputPrice) || 0,
@@ -190,8 +194,8 @@ export function Channels() {
 	};
 
 	const discoverModels = async () => {
-		if (!form.baseUrl || (!form.secret && !editingId)) {
-			toast.error("请先填写 Base URL 和上游 API Key");
+		if (!form.baseUrl || (form.requiresApiKey && !form.secret && !editingId)) {
+			toast.error(form.requiresApiKey ? "请先填写 Base URL 和上游 API Key" : "请先填写 Base URL");
 			return;
 		}
 		setDiscovering(true);
@@ -200,6 +204,7 @@ export function Channels() {
 				method: "POST",
 				body: JSON.stringify({
 					baseUrl: form.baseUrl,
+					requiresApiKey: form.requiresApiKey,
 					secret: form.secret || undefined,
 					channelId: editingId || undefined,
 					inputPrice: Number(form.defaultInputPrice) || 0,
@@ -264,7 +269,7 @@ export function Channels() {
 	};
 
 	const testExtractor = async () => {
-		if (!form.secret.trim() && !editingId) {
+		if (form.requiresApiKey && !form.secret.trim() && !editingId) {
 			toast.error("请先填写上游 API Key");
 			return;
 		}
@@ -283,7 +288,11 @@ export function Channels() {
 				body: JSON.stringify(
 					editingId
 						? { extractorCode: form.extractorCode }
-						: { secret: form.secret, extractorCode: form.extractorCode },
+						: {
+							secret: form.secret,
+							requiresApiKey: form.requiresApiKey,
+							extractorCode: form.extractorCode,
+						},
 				),
 				},
 			);
@@ -396,16 +405,45 @@ export function Channels() {
 						</label>
 					</div>
 
-					<label className="block space-y-1 text-sm">
-						<span className="font-medium text-gray-700 dark:text-gray-300">上游 API Key</span>
+					<div className="block space-y-1 text-sm">
+						<div className="flex flex-wrap items-center justify-between gap-3">
+							<span className="font-medium text-gray-700 dark:text-gray-300">上游 API Key</span>
+							<label className="inline-flex cursor-pointer items-center gap-2 text-xs text-gray-600 dark:text-gray-400">
+								<input
+									type="checkbox"
+									checked={!form.requiresApiKey}
+									onChange={(e) =>
+										setForm({
+											...form,
+											requiresApiKey: !e.target.checked,
+											secret: e.target.checked ? "" : form.secret,
+										})
+									}
+									className="size-4 rounded border-gray-300 text-brand-600 focus:ring-brand-500"
+								/>
+								上游不需要传 API Key
+							</label>
+						</div>
 						<Input
-							required={!editingId}
+							required={form.requiresApiKey && !editingId}
+							disabled={!form.requiresApiKey}
 							type="password"
 							value={form.secret}
-							placeholder={editingId ? "留空表示保留当前 Key" : "不会显示给普通用户"}
+							placeholder={
+								!form.requiresApiKey
+									? "已选择无认证，不会发送 API Key"
+									: editingId
+										? "留空表示保留当前 Key"
+										: "不会显示给普通用户"
+							}
 							onChange={(e) => setForm({ ...form, secret: e.target.value })}
 						/>
-					</label>
+						<p className="text-xs text-gray-500">
+							{form.requiresApiKey
+								? "默认会以 Authorization: Bearer 方式发送给上游。"
+								: "模型发现、余额提取和模型请求都不会发送 Authorization 头。"}
+						</p>
+					</div>
 
 					<div className="grid gap-4 sm:grid-cols-2">
 						<label className="space-y-1 text-sm">
@@ -612,7 +650,7 @@ export function Channels() {
 									</div>
 									<div className="mt-1 truncate text-xs text-gray-500">{channel.baseUrl}</div>
 									<div className="mt-1 text-xs text-gray-500">
-										{channel.models.length} 个模型 · Key {channel.secretHint} · ×{channel.priceMultiplier}
+										{channel.models.length} 个模型 · {channel.requiresApiKey ? `Key ${channel.secretHint}` : "无需 Key"} · ×{channel.priceMultiplier}
 									</div>
 									<div className="mt-1 text-xs text-gray-500">
 										{channel.hasExtractor
