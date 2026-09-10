@@ -129,35 +129,42 @@ assistantRouter.post("/", async (c) => {
 			const reader = upstream.body.getReader();
 			const decoder = new TextDecoder();
 			let buf = "";
+			const processSseLine = (line: string) => {
+				const normalized = line.trimEnd();
+				if (!normalized.startsWith("data:")) return;
+				const payload = normalized.slice(5).trim();
+				if (!payload || payload === "[DONE]") return;
+
+				try {
+					const delta = JSON.parse(payload).choices?.[0]?.delta?.content;
+					if (typeof delta === "string" && delta) {
+						fullResponseText += delta;
+						writer.write({ type: "text-delta", delta, id: partId });
+					}
+				} catch (parseErr) {
+					log.warn("assistant", "SSE chunk parse error", {
+						payload: payload.slice(0, 200),
+						error:
+							parseErr instanceof Error ? parseErr.message : String(parseErr),
+					});
+				}
+			};
 
 			for (;;) {
 				const { done, value } = await reader.read();
 				if (done) break;
 
-				buf += decoder.decode(value, { stream: true });
+				buf += decoder.decode(value, { stream: true }).replace(/\r\n/g, "\n");
 				const lines = buf.split("\n");
 				buf = lines.pop() ?? "";
 
-				for (const line of lines) {
-					if (!line.startsWith("data: ")) continue;
-					const payload = line.slice(6).trim();
-					if (payload === "[DONE]") continue;
-
-					try {
-						const delta = JSON.parse(payload).choices?.[0]?.delta?.content;
-						if (delta) {
-							fullResponseText += delta;
-							writer.write({ type: "text-delta", delta, id: partId });
-						}
-					} catch (parseErr) {
-						log.warn("assistant", "SSE chunk parse error", {
-							payload: payload.slice(0, 200),
-							error:
-								parseErr instanceof Error ? parseErr.message : String(parseErr),
-						});
-					}
-				}
+				for (const line of lines) processSseLine(line);
 			}
+
+			// Some upstreams close the connection immediately after the final JSON
+			// frame without emitting a trailing newline. Do not drop that frame.
+			buf += decoder.decode();
+			if (buf) processSseLine(buf);
 
 			writer.write({ type: "text-end", id: partId });
 			writer.write({ type: "finish-step" });
