@@ -96,6 +96,18 @@ export interface ProviderAdapter {
 		body: Record<string, unknown>,
 	): Promise<Response>;
 
+	/** OpenAI Images API: POST /v1/images/generations. */
+	forwardImageGeneration?(
+		secret: string,
+		body: Record<string, unknown>,
+	): Promise<Response>;
+
+	/** OpenAI Images API: POST /v1/images/edits. */
+	forwardImageEdit?(
+		secret: string,
+		body: FormData,
+	): Promise<Response>;
+
 	/** Fetch provider models. When systemKey is provided, prefer dynamic API fetch over static JSON. */
 	fetchModels(cnyUsdRate?: number, systemKey?: string): Promise<ParsedModel[]>;
 }

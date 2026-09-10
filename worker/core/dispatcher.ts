@@ -18,7 +18,25 @@ export interface DispatchResult {
 	provider: ProviderAdapter;
 	modelId: string;
 	upstreamModelId: string | null;
-	modelPrice: { inputPricePerM: number; outputPricePerM: number };
+	modelPrice: {
+		inputPricePerM: number;
+		outputPricePerM: number;
+		imagePricePerImage: number | null;
+	};
+}
+
+function readImagePrice(metadata: string | null): number | null {
+	if (!metadata) return null;
+	try {
+		const value = JSON.parse(metadata) as {
+			imagePricePerImage?: unknown;
+		};
+		if (value.imagePricePerImage == null) return null;
+		const price = Number(value.imagePricePerImage);
+		return Number.isFinite(price) && price >= 0 ? price : null;
+	} catch {
+		return null;
+	}
 }
 
 /**
@@ -68,6 +86,7 @@ export async function dispatchAll(
 			const provider: ProviderAdapter | null =
 				registeredProvider ?? createCustomProvider(credential);
 			if (!provider) continue;
+			const imagePrice = readImagePrice(offering.metadata);
 			candidates.push({
 				credential,
 				provider,
@@ -76,6 +95,10 @@ export async function dispatchAll(
 				modelPrice: {
 					inputPricePerM: offering.input_price * credential.price_multiplier,
 					outputPricePerM: offering.output_price * credential.price_multiplier,
+					imagePricePerImage:
+						imagePrice == null
+							? null
+							: imagePrice * credential.price_multiplier,
 				},
 			});
 		}

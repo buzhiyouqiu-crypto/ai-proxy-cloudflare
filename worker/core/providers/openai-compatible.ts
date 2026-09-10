@@ -208,7 +208,7 @@ export class OpenAICompatibleAdapter implements ProviderAdapter {
 	private async forward(
 		secret: string,
 		body: Record<string, unknown>,
-		endpoint: string,
+		endpoint: "chat/completions" | "embeddings" | "images/generations",
 	): Promise<Response> {
 		const fwdBody =
 			this.config.stripModelPrefix && typeof body.model === "string"
@@ -244,6 +244,37 @@ export class OpenAICompatibleAdapter implements ProviderAdapter {
 		});
 	}
 
+	private async forwardForm(
+		secret: string,
+		body: FormData,
+		endpoint: "images/edits",
+	): Promise<Response> {
+		const upstreamResponse = await fetch(`${this.config.baseUrl}/${endpoint}`, {
+			method: "POST",
+			headers: {
+				Authorization: `Bearer ${secret}`,
+				...this.config.extraHeaders,
+			},
+			body,
+		});
+
+		const headers = new Headers();
+		const skipHeaders = new Set([
+			"connection",
+			"keep-alive",
+			"transfer-encoding",
+		]);
+		upstreamResponse.headers.forEach((value, key) => {
+			if (!skipHeaders.has(key.toLowerCase())) headers.set(key, value);
+		});
+
+		return new Response(upstreamResponse.body, {
+			status: upstreamResponse.status,
+			statusText: upstreamResponse.statusText,
+			headers,
+		});
+	}
+
 	async forwardRequest(
 		secret: string,
 		body: Record<string, unknown>,
@@ -256,5 +287,16 @@ export class OpenAICompatibleAdapter implements ProviderAdapter {
 		body: Record<string, unknown>,
 	): Promise<Response> {
 		return this.forward(secret, body, "embeddings");
+	}
+
+	async forwardImageGeneration(
+		secret: string,
+		body: Record<string, unknown>,
+	): Promise<Response> {
+		return this.forward(secret, body, "images/generations");
+	}
+
+	async forwardImageEdit(secret: string, body: FormData): Promise<Response> {
+		return this.forwardForm(secret, body, "images/edits");
 	}
 }

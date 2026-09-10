@@ -13,6 +13,8 @@ export interface CustomChannelModel {
 	name?: string | null;
 	inputPrice: number;
 	outputPrice: number;
+	/** Optional fallback price in USD per generated/edited image. */
+	imagePrice?: number | null;
 	contextLength?: number | null;
 	modelType?: "chat" | "embedding";
 }
@@ -497,7 +499,7 @@ export class CustomOpenAICompatibleAdapter implements ProviderAdapter {
 	private async forward(
 		secret: string,
 		body: Record<string, unknown>,
-		endpoint: "chat/completions" | "embeddings",
+		endpoint: "chat/completions" | "embeddings" | "images/generations",
 	): Promise<Response> {
 		const upstreamResponse = await fetch(
 			`${normalizeBaseUrl(this.channel.baseUrl)}/${endpoint}`,
@@ -508,6 +510,29 @@ export class CustomOpenAICompatibleAdapter implements ProviderAdapter {
 					Authorization: `Bearer ${secret}`,
 				},
 				body: JSON.stringify(body),
+			},
+		);
+
+		const headers = new Headers();
+		const skipHeaders = new Set(["connection", "keep-alive", "transfer-encoding"]);
+		upstreamResponse.headers.forEach((value, key) => {
+			if (!skipHeaders.has(key.toLowerCase())) headers.set(key, value);
+		});
+
+		return new Response(upstreamResponse.body, {
+			status: upstreamResponse.status,
+			statusText: upstreamResponse.statusText,
+			headers,
+		});
+	}
+
+	private async forwardForm(secret: string, body: FormData): Promise<Response> {
+		const upstreamResponse = await fetch(
+			`${normalizeBaseUrl(this.channel.baseUrl)}/images/edits`,
+			{
+				method: "POST",
+				headers: { Authorization: `Bearer ${secret}` },
+				body,
 			},
 		);
 
@@ -536,6 +561,17 @@ export class CustomOpenAICompatibleAdapter implements ProviderAdapter {
 		body: Record<string, unknown>,
 	): Promise<Response> {
 		return this.forward(secret, body, "embeddings");
+	}
+
+	forwardImageGeneration(
+		secret: string,
+		body: Record<string, unknown>,
+	): Promise<Response> {
+		return this.forward(secret, body, "images/generations");
+	}
+
+	forwardImageEdit(secret: string, body: FormData): Promise<Response> {
+		return this.forwardForm(secret, body);
 	}
 }
 

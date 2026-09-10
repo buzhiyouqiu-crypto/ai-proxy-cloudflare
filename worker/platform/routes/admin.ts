@@ -37,6 +37,7 @@ const CustomModelInput = z.object({
 	name: z.string().trim().max(200).nullable().optional(),
 	inputPrice: z.number().min(0).max(1_000_000),
 	outputPrice: z.number().min(0).max(1_000_000),
+	imagePrice: z.number().min(0).max(1_000_000).nullable().optional(),
 	contextLength: z.number().int().positive().max(10_000_000).nullable().optional(),
 	modelType: z.enum(["chat", "embedding"]).optional(),
 });
@@ -93,8 +94,9 @@ function customCatalogEntries(
 			input_price: model.inputPrice,
 			output_price: model.outputPrice,
 			context_length: model.contextLength ?? null,
-			input_modalities: '["text"]',
-			output_modalities: '["text"]',
+			input_modalities:
+				model.imagePrice != null ? '["text","image"]' : '["text"]',
+			output_modalities: model.imagePrice != null ? '["image"]' : '["text"]',
 			upstream_model_id: model.id,
 			metadata: JSON.stringify({
 				channelId,
@@ -104,7 +106,12 @@ function customCatalogEntries(
 				pricing: {
 					prompt: String(model.inputPrice / 1_000_000),
 					completion: String(model.outputPrice / 1_000_000),
+					image:
+						model.imagePrice == null
+							? null
+							: String(model.imagePrice),
 				},
+				imagePricePerImage: model.imagePrice ?? null,
 			}),
 			created: Date.now(),
 		};

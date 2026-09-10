@@ -75,11 +75,17 @@ function normalizeReasoning(body: Record<string, unknown>): void {
 	}
 }
 
-type RequestMode = "chat" | "embedding";
+type RequestMode = "chat" | "embedding" | "image-generation" | "image-edit";
 
 export interface GatewayRequest {
 	modelId: string;
 	body: Record<string, unknown>;
+	providerIds?: string[];
+}
+
+export interface ImageEditGatewayRequest {
+	modelId: string;
+	body: FormData;
 	providerIds?: string[];
 }
 
@@ -104,9 +110,38 @@ export function executeEmbedding(
 	return execute(c, req, "embedding");
 }
 
-async function execute(
+export function executeImageGeneration(
 	c: Context<AppEnv>,
 	req: GatewayRequest,
+): Promise<GatewayResult> {
+	return execute(c, req, "image-generation");
+}
+
+export function executeImageEdit(
+	c: Context<AppEnv>,
+	req: ImageEditGatewayRequest,
+): Promise<GatewayResult> {
+	return execute(c, req, "image-edit");
+}
+
+function cloneImageEditForm(form: FormData, model: string): FormData {
+	const next = new FormData();
+	for (const [key, value] of form.entries()) {
+		if (key !== "model") next.append(key, value);
+	}
+	next.set("model", model);
+	return next;
+}
+
+function imageCount(body: Record<string, unknown> | FormData): number {
+	const raw = body instanceof FormData ? body.get("n") : body.n;
+	const parsed = Number(raw);
+	return Number.isInteger(parsed) && parsed >= 1 && parsed <= 10 ? parsed : 1;
+}
+
+async function execute(
+	c: Context<AppEnv>,
+	req: GatewayRequest | ImageEditGatewayRequest,
 	mode: RequestMode,
 ): Promise<GatewayResult> {
 	const consumerId = c.get("owner_id");
@@ -155,7 +190,7 @@ async function execute(
 		mode,
 	});
 
-	if (mode === "chat") normalizeReasoning(req.body);
+	if (mode === "chat") normalizeReasoning(req.body as Record<string, unknown>);
 
 	let lastError: unknown;
 
@@ -164,7 +199,12 @@ async function execute(
 			candidates[attempt];
 		const isSub = provider.info.isSubscription ?? false;
 
-		if (mode === "embedding" && !provider.forwardEmbedding) continue;
+		if (
+			(mode === "embedding" && !provider.forwardEmbedding) ||
+			(mode === "image-generation" && !provider.forwardImageGeneration) ||
+			(mode === "image-edit" && !provider.forwardImageEdit)
+		)
+			continue;
 
 		if (cb.isOpen(provider.info.id, modelId)) {
 			// Still skip if there are remaining candidates to try
@@ -186,24 +226,52 @@ async function execute(
 		}
 
 		const upstreamModel = upstreamModelId ?? modelId;
-		const upstreamBody =
+		const upstreamBody: Record<string, unknown> | FormData =
 			mode === "chat"
 				? {
-						...sanitizeMessages(req.body),
+						...sanitizeMessages(req.body as Record<string, unknown>),
 						model: upstreamModel,
-						stream_options: req.body.stream
+						stream_options: (req.body as Record<string, unknown>).stream
 							? { include_usage: true }
 							: undefined,
 					}
-				: { ...req.body, model: upstreamModel };
+				: mode === "image-edit"
+					? cloneImageEditForm(req.body as FormData, upstreamModel)
+					: { ...(req.body as Record<string, unknown>), model: upstreamModel };
+		const fallbackUsage =
+			(mode === "image-generation" || mode === "image-edit") &&
+			modelPrice.imagePricePerImage != null
+				? {
+						prompt_tokens: 0,
+						completion_tokens: 0,
+						total_tokens: 0,
+						image_count: imageCount(upstreamBody),
+					}
+				: undefined;
 
 		try {
 			const secret = await credDao.decryptSecret(credential);
 			const t0 = Date.now();
 			const response =
 				mode === "chat"
-					? await provider.forwardRequest(secret, upstreamBody)
-					: await provider.forwardEmbedding?.(secret, upstreamBody);
+					? await provider.forwardRequest(
+							secret,
+							upstreamBody as Record<string, unknown>,
+						)
+					: mode === "embedding"
+						? await provider.forwardEmbedding?.(
+								secret,
+								upstreamBody as Record<string, unknown>,
+							)
+						: mode === "image-generation"
+							? await provider.forwardImageGeneration?.(
+									secret,
+									upstreamBody as Record<string, unknown>,
+								)
+							: await provider.forwardImageEdit?.(
+									secret,
+									upstreamBody as FormData,
+								);
 
 			if (!response) continue;
 
@@ -250,6 +318,7 @@ async function execute(
 			});
 
 			const finalResponse = interceptResponse(response, c.executionCtx, {
+				fallbackUsage,
 				onUsage: (usage) => {
 					c.executionCtx.waitUntil(
 						(async () => {

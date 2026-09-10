@@ -25,7 +25,11 @@ export interface BillingParams {
 }
 
 export function calculateBaseCost(
-	modelPrice: { inputPricePerM: number; outputPricePerM: number },
+	modelPrice: {
+		inputPricePerM: number;
+		outputPricePerM: number;
+		imagePricePerImage?: number | null;
+	},
 	usage: TokenUsage,
 ): number {
 	const reportedCost = usage.cost ?? usage.estimated_cost;
@@ -35,7 +39,11 @@ export function calculateBaseCost(
 		(usage.prompt_tokens / 1_000_000) * modelPrice.inputPricePerM;
 	const outputCost =
 		(usage.completion_tokens / 1_000_000) * modelPrice.outputPricePerM;
-	return inputCost + outputCost;
+	const imageCost =
+		usage.image_count && modelPrice.imagePricePerImage != null
+			? usage.image_count * modelPrice.imagePricePerImage
+			: 0;
+	return inputCost + outputCost + imageCost;
 }
 
 export async function recordLog(

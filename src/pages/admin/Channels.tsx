@@ -23,6 +23,7 @@ interface ChannelModel {
 	name?: string | null;
 	inputPrice: number;
 	outputPrice: number;
+	imagePrice?: number | null;
 	contextLength?: number | null;
 	modelType?: "chat" | "embedding";
 }
@@ -147,7 +148,11 @@ export function Channels() {
 				if (!model.id.trim()) {
 					throw new Error(`第 ${index + 1} 个模型缺少上游模型 ID`);
 				}
-				if (model.inputPrice < 0 || model.outputPrice < 0) {
+				if (
+					model.inputPrice < 0 ||
+					model.outputPrice < 0 ||
+					(model.imagePrice != null && model.imagePrice < 0)
+				) {
 					throw new Error(`第 ${index + 1} 个模型价格不能为负数`);
 				}
 				return {
@@ -233,6 +238,7 @@ export function Channels() {
 					name: "",
 					inputPrice: Number(current.defaultInputPrice) || 0,
 					outputPrice: Number(current.defaultOutputPrice) || 0,
+					imagePrice: null,
 					catalogModelId: null,
 					catalogName: null,
 					modelType: "chat",
@@ -450,8 +456,11 @@ export function Channels() {
 						) : (
 							<div className="space-y-3">
 								{form.models.map((model, index) => (
-									<div key={`${model.id}-${index}`} className="rounded-lg border border-gray-200 p-3 dark:border-white/10">
-										<div className="grid gap-3 lg:grid-cols-5">
+									<div
+										key={`${model.id}-${index}`}
+										className="rounded-lg border border-gray-200 p-3 dark:border-white/10"
+									>
+										<div className="grid gap-3 lg:grid-cols-7">
 											<label className="space-y-1 text-xs lg:col-span-2">
 												<span className="font-medium text-gray-700 dark:text-gray-300">上游模型 ID</span>
 												<Input
@@ -460,39 +469,68 @@ export function Channels() {
 													onChange={(e) => updateModel(index, { id: e.target.value })}
 												/>
 											</label>
-												<label className="space-y-1 text-xs lg:col-span-2">
-													<span className="font-medium text-gray-700 dark:text-gray-300">规范模型（可选）</span>
-													<ModelCatalogSelect
-														options={catalogModels ?? []}
-														value={model.catalogModelId}
-														onChange={(option) => {
-															const value = option?.id ?? null;
-															updateModel(index, {
-																catalogModelId: value,
-																catalogName: option?.name ?? null,
-																...(option
-																	? {
-																		inputPrice: option.inputPrice,
-																		outputPrice: option.outputPrice,
-																		contextLength: option.contextLength,
-																		modelType: option.modelType,
-																		name: option.name || model.name || model.id,
-																	}
-																	: {
-																		name:
-																			model.name === model.catalogName ? model.id : model.name,
+											<label className="space-y-1 text-xs lg:col-span-2">
+												<span className="font-medium text-gray-700 dark:text-gray-300">规范模型（可选）</span>
+												<ModelCatalogSelect
+													options={catalogModels ?? []}
+													value={model.catalogModelId}
+													onChange={(option) => {
+														const value = option?.id ?? null;
+														updateModel(index, {
+															catalogModelId: value,
+															catalogName: option?.name ?? null,
+															...(option
+																? {
+																	inputPrice: option.inputPrice,
+																	outputPrice: option.outputPrice,
+																	contextLength: option.contextLength,
+																	modelType: option.modelType,
+																	name: option.name || model.name || model.id,
+																}
+																: {
+																	name:
+																		model.name === model.catalogName ? model.id : model.name,
 																	}),
 															});
-														}}
-													/>
-												</label>
+													}}
+												/>
+											</label>
 											<label className="space-y-1 text-xs">
 												<span className="font-medium text-gray-700 dark:text-gray-300">输入价 / 1M</span>
-												<Input type="number" min="0" step="0.000001" value={model.inputPrice} onChange={(e) => updateModel(index, { inputPrice: Number(e.target.value) || 0 })} />
+												<Input
+													type="number"
+													min="0"
+													step="0.000001"
+													value={model.inputPrice}
+													onChange={(e) => updateModel(index, { inputPrice: Number(e.target.value) || 0 })}
+												/>
 											</label>
 											<label className="space-y-1 text-xs">
 												<span className="font-medium text-gray-700 dark:text-gray-300">输出价 / 1M</span>
-												<Input type="number" min="0" step="0.000001" value={model.outputPrice} onChange={(e) => updateModel(index, { outputPrice: Number(e.target.value) || 0 })} />
+												<Input
+													type="number"
+													min="0"
+													step="0.000001"
+													value={model.outputPrice}
+													onChange={(e) => updateModel(index, { outputPrice: Number(e.target.value) || 0 })}
+												/>
+											</label>
+											<label className="space-y-1 text-xs">
+												<span className="font-medium text-gray-700 dark:text-gray-300">图片单价 / 张</span>
+												<Input
+													type="number"
+													min="0"
+													step="0.000001"
+																value={model.imagePrice ?? ""}
+																placeholder="可选"
+																onChange={(e) => {
+																	const value = e.target.value;
+																	updateModel(index, {
+																		imagePrice: value === "" ? null : Number(value) || 0,
+																	});
+															}}
+												/>
+												<span className="text-[11px] text-gray-500">上游不返回 usage 时按此价格兜底扣费</span>
 											</label>
 										</div>
 										<div className="mt-3 flex items-end gap-3">

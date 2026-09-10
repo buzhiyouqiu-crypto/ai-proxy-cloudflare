@@ -1,6 +1,35 @@
 # Image Generation
 
-Generate images from text prompts using models with `"image"` in their output modalities. All image generation goes through the standard `/v1/chat/completions` endpoint — just add the `modalities` parameter.
+Generate images from text prompts using models with `"image"` in their output modalities. Keyaos supports both the multimodal `/v1/chat/completions` flow and the native OpenAI Images-compatible endpoints described below.
+
+For providers that implement the OpenAI Images API, Keyaos also exposes the native endpoints `/v1/images/generations` and `/v1/images/edits`. These requests are routed through the same provider selection, credential failover, and billing pipeline.
+
+## OpenAI Images API
+
+Use the native generation endpoint when the upstream provider exposes `POST /v1/images/generations`:
+
+```bash
+curl https://keyaos.com/v1/images/generations \
+  -H "Content-Type: application/json" \
+  -H "Authorization: Bearer $KEYAOS_API_KEY" \
+  -d '{
+    "model": "gpt-image-2.5-flare",
+    "prompt": "A serene Japanese garden with cherry blossoms at sunset",
+    "size": "1024x1024"
+  }'
+```
+
+For image editing, send the source image as multipart form data:
+
+```bash
+curl https://keyaos.com/v1/images/edits \
+  -H "Authorization: Bearer $KEYAOS_API_KEY" \
+  -F "model=gpt-image-2.5-flare" \
+  -F "prompt=Add warm sunset light" \
+  -F "image=@input.png"
+```
+
+In the administrator custom-channel model settings, optionally set **图片单价 / 张**. It is used as the per-image fallback charge when an upstream response does not include usage information; token/cost usage returned by the upstream takes precedence.
 
 ## Basic Usage
 
