@@ -25,6 +25,7 @@ import {
 } from "../platform/billing/settlement";
 import { WalletDao } from "../platform/billing/wallet-dao";
 import {
+	ApiError,
 	CreditsExhaustedNoFallbackError,
 	ModelNotAllowedError,
 	NoKeyAvailableError,
@@ -151,6 +152,19 @@ async function execute(
 	const requestId = crypto.randomUUID();
 	const rlog = requestLogger(requestId, { modelId: req.modelId, consumerId });
 	const encryptionKey = c.env.ENCRYPTION_KEY;
+	const specificCustomChannelRequested = (req.providerIds ?? []).some((id) =>
+		id.startsWith("custom:"),
+	);
+	const canSelectSpecificCustomChannel =
+		!isPlatform || consumerId === c.env.PLATFORM_OWNER_ID;
+	if (specificCustomChannelRequested && !canSelectSpecificCustomChannel) {
+		throw new ApiError(
+			"Selecting a specific custom channel is restricted to the platform owner",
+			403,
+			"permission_error",
+			"custom_channel_forbidden",
+		);
+	}
 
 	if (allowedModels) {
 		const id = req.modelId.toLowerCase();

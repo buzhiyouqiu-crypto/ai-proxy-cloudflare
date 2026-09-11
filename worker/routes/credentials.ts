@@ -2,6 +2,7 @@ import { Hono } from "hono";
 import { z } from "zod";
 import { CredentialsDao } from "../core/db/credentials-dao";
 import { LogsDao } from "../core/db/logs-dao";
+import { parseCustomChannelMetadata } from "../core/providers/custom-openai-compatible";
 import { getProvider } from "../core/providers/registry";
 import {
 	isMonetaryBalance,
@@ -161,20 +162,27 @@ credentialsRouter.get("/", async (c) => {
 		new LogsDao(c.env.DB).getEarningsByCredential(ownerId),
 	]);
 	return c.json({
-		data: all.map((cred) => ({
-			id: cred.id,
-			provider_id: cred.provider_id,
-			authType: cred.auth_type,
-			secretHint: cred.secret_hint,
-			quota: cred.quota,
-			quotaSource: cred.quota_source,
-			health: cred.health_status,
-			isEnabled: cred.is_enabled === 1,
-			priceMultiplier: cred.price_multiplier,
-			balance: readBalanceSnapshot(cred.metadata),
-			addedAt: cred.added_at,
-			earnings: earnings.get(cred.id) ?? 0,
-		})),
+		data: all.map((cred) => {
+			const customChannel =
+				cred.provider_id === "custom"
+					? parseCustomChannelMetadata(cred.metadata)
+					: null;
+			return {
+				id: cred.id,
+				provider_id: cred.provider_id,
+				channelName: customChannel?.name ?? null,
+				authType: cred.auth_type,
+				secretHint: cred.secret_hint,
+				quota: cred.quota,
+				quotaSource: cred.quota_source,
+				health: cred.health_status,
+				isEnabled: cred.is_enabled === 1,
+				priceMultiplier: cred.price_multiplier,
+				balance: readBalanceSnapshot(cred.metadata),
+				addedAt: cred.added_at,
+				earnings: earnings.get(cred.id) ?? 0,
+			};
+		}),
 	});
 });
 

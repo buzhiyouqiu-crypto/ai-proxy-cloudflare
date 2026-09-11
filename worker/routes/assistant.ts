@@ -125,46 +125,85 @@ assistantRouter.post("/", async (c) => {
 			}
 
 			writer.write({ type: "text-start", id: partId });
+			const emitText = (text: string) => {
+				if (!text) return;
+				fullResponseText += text;
+				writer.write({ type: "text-delta", delta: text, id: partId });
+			};
+			const contentToText = (content: unknown): string => {
+				if (typeof content === "string") return content;
+				if (!Array.isArray(content)) return "";
+				return content
+					.map((part) => {
+						if (!part || typeof part !== "object") return "";
+						const value = part as Record<string, unknown>;
+						return typeof value.text === "string" ? value.text : "";
+					})
+					.join("");
+			};
 
-			const reader = upstream.body.getReader();
-			const decoder = new TextDecoder();
-			let buf = "";
-			const processSseLine = (line: string) => {
-				const normalized = line.trimEnd();
-				if (!normalized.startsWith("data:")) return;
-				const payload = normalized.slice(5).trim();
-				if (!payload || payload === "[DONE]") return;
+			if (upstream.headers.get("content-type")?.includes("text/event-stream")) {
+				const reader = upstream.body.getReader();
+				const decoder = new TextDecoder();
+				let buf = "";
+				const processSseLine = (line: string) => {
+					const normalized = line.trimEnd();
+					if (!normalized.startsWith("data:")) return;
+					const payload = normalized.slice(5).trim();
+					if (!payload || payload === "[DONE]") return;
 
-				try {
-					const delta = JSON.parse(payload).choices?.[0]?.delta?.content;
-					if (typeof delta === "string" && delta) {
-						fullResponseText += delta;
-						writer.write({ type: "text-delta", delta, id: partId });
+					try {
+						const delta = JSON.parse(payload).choices?.[0]?.delta?.content;
+						if (typeof delta === "string") emitText(delta);
+					} catch (parseErr) {
+						log.warn("assistant", "SSE chunk parse error", {
+							payload: payload.slice(0, 200),
+							error:
+								parseErr instanceof Error ? parseErr.message : String(parseErr),
+						});
 					}
+				};
+
+				for (;;) {
+					const { done, value } = await reader.read();
+					if (done) break;
+
+					buf += decoder.decode(value, { stream: true }).replace(/\r\n/g, "\n");
+					const lines = buf.split("\n");
+					buf = lines.pop() ?? "";
+
+					for (const line of lines) processSseLine(line);
+				}
+
+				// Some upstreams close immediately after the final JSON frame without
+				// emitting a trailing newline. Do not drop that frame.
+				buf += decoder.decode();
+				if (buf) processSseLine(buf);
+			} else {
+				// A few OpenAI-compatible upstreams ignore stream=true and return a
+				// normal JSON completion. The web chat should still display it.
+				const raw = await upstream.text();
+				try {
+					const payload = JSON.parse(raw) as Record<string, unknown>;
+					const choice = Array.isArray(payload.choices)
+						? (payload.choices[0] as Record<string, unknown> | undefined)
+						: undefined;
+					const message =
+						choice?.message && typeof choice.message === "object"
+							? (choice.message as Record<string, unknown>)
+							: undefined;
+					emitText(
+						contentToText(message?.content) ||
+							contentToText(payload.output_text),
+					);
 				} catch (parseErr) {
-					log.warn("assistant", "SSE chunk parse error", {
-						payload: payload.slice(0, 200),
+					log.warn("assistant", "Non-stream upstream response parse error", {
+						payload: raw.slice(0, 200),
 						error:
 							parseErr instanceof Error ? parseErr.message : String(parseErr),
 					});
 				}
-			};
-
-			for (;;) {
-				const { done, value } = await reader.read();
-				if (done) break;
-
-				buf += decoder.decode(value, { stream: true }).replace(/\r\n/g, "\n");
-				const lines = buf.split("\n");
-				buf = lines.pop() ?? "";
-
-				for (const line of lines) processSseLine(line);
 			}
-
-			// Some upstreams close the connection immediately after the final JSON
-			// frame without emitting a trailing newline. Do not drop that frame.
-			buf += decoder.decode();
-			if (buf) processSseLine(buf);
 
 			writer.write({ type: "text-end", id: partId });
 			writer.write({ type: "finish-step" });

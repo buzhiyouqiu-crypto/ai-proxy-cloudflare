@@ -35,6 +35,7 @@ import { toastApiError } from "../utils/toast-error";
 interface CredentialInfo {
 	id: string;
 	provider_id: string;
+	channelName: string | null;
 	authType: "api_key" | "oauth";
 	secretHint: string;
 	quota: number | null;
@@ -648,13 +649,17 @@ export function Byok() {
 														const meta = providers.find(
 															(p) => p.id === cred.provider_id,
 														);
+														const name =
+															cred.provider_id === "custom"
+																? cred.channelName || meta?.name || "自定义渠道"
+																: meta?.name || cred.provider_id;
 														return meta ? (
 															<ProviderChip
 																src={meta.logoUrl}
-																name={meta.name}
+																name={name}
 															/>
 														) : (
-															<span>{cred.provider_id}</span>
+															<span>{name}</span>
 														);
 													})()}
 												</td>

@@ -15,6 +15,7 @@ import { useAuth } from "../auth";
 import { CopyButton } from "../components/CopyButton";
 import { ChatThread } from "../components/chat/ChatThread";
 import { ChatThreadList } from "../components/chat/ChatThreadList";
+import type { AdminChannelSummary } from "../components/CustomChannelDisclosure";
 import {
 	loadSystemPrompt,
 	SystemPrompt,
@@ -33,10 +34,18 @@ import type { ProviderMeta } from "../types/provider";
 const LS_MODEL_KEY = "kx-chat-model";
 const LS_PROVIDER_KEY = "kx-chat-provider";
 const AUTO_PROVIDER = "auto";
+const CUSTOM_PROVIDER = "custom";
+const CUSTOM_CHANNEL_PREFIX = "custom:";
+
+type ChatProviderOption = Pick<ProviderMeta, "id" | "name" | "logoUrl">;
+
+function customChannelProviderId(channelId: string): string {
+	return `${CUSTOM_CHANNEL_PREFIX}${channelId}`;
+}
 
 export function Chat() {
 	const { t } = useTranslation();
-	const { getToken } = useAuth();
+	const { getToken, isAdmin } = useAuth();
 	const [searchParams] = useSearchParams();
 	const urlModel = searchParams.get("model");
 	const [modelId, setModelId] = useState(
@@ -142,6 +151,12 @@ export function Chat() {
 
 	const { data: models } = useFetch<ModelEntry[]>("/api/models");
 	const { data: providersMeta } = useFetch<ProviderMeta[]>("/api/providers");
+	const { data: adminChannels, loading: adminChannelsLoading } = useFetch<
+		AdminChannelSummary[]
+	>("/api/admin/channels", {
+		skip: isAdmin !== true,
+		staleTime: 0,
+	});
 
 	const uniqueModels = useMemo(() => {
 		if (!models) return [];
@@ -158,12 +173,52 @@ export function Chat() {
 		const providerIds = new Set(
 			models.filter((m) => m.id === modelId).map((m) => m.provider_id),
 		);
-		if (!providersMeta)
-			return [...providerIds].map((id) => ({ id, name: id, logoUrl: "" }));
-		return providersMeta.filter((p) => providerIds.has(p.id));
-	}, [models, modelId, providersMeta]);
+		const providers: ChatProviderOption[] = providersMeta
+			? providersMeta.filter((p) => providerIds.has(p.id))
+			: [...providerIds].map((id) => ({ id, name: id, logoUrl: "" }));
+
+		// Custom channels are intentionally hidden behind the generic provider
+		// label for ordinary users. The owner can select one concrete channel
+		// when it offers the currently selected canonical model.
+		if (
+			isAdmin !== true ||
+			!adminChannels ||
+			!providerIds.has(CUSTOM_PROVIDER)
+		) {
+			return providers;
+		}
+
+		const customProvider = providers.find((p) => p.id === CUSTOM_PROVIDER) ?? {
+			id: CUSTOM_PROVIDER,
+			name: "自定义渠道",
+			logoUrl: "https://api.iconify.design/mdi:server-network.svg",
+		};
+		const channelProviders = adminChannels
+			.filter(
+				(channel) =>
+					channel.isEnabled &&
+					channel.models.some(
+						(model) => (model.catalogModelId || model.id) === modelId,
+					),
+			)
+			.map<ChatProviderOption>((channel) => ({
+				id: customChannelProviderId(channel.id),
+				name: channel.name,
+				logoUrl: customProvider.logoUrl,
+			}));
+
+		return [
+			...providers.filter((p) => p.id !== CUSTOM_PROVIDER),
+			customProvider,
+			...channelProviders,
+		];
+	}, [adminChannels, isAdmin, modelId, models, providersMeta]);
 
 	useEffect(() => {
+		// Keep a persisted concrete channel while the owner-only channel list is
+		// loading. Otherwise the initial generic provider list would reset it to
+		// Auto before /api/admin/channels has returned.
+		if (isAdmin === true && adminChannelsLoading) return;
 		if (
 			providerId !== AUTO_PROVIDER &&
 			availableProviders.length > 0 &&
@@ -171,7 +226,13 @@ export function Chat() {
 		) {
 			handleProviderIdChange(AUTO_PROVIDER);
 		}
-	}, [availableProviders, providerId, handleProviderIdChange]);
+	}, [
+		adminChannelsLoading,
+		availableProviders,
+		handleProviderIdChange,
+		isAdmin,
+		providerId,
+	]);
 
 	useEffect(() => {
 		if (uniqueModels.length > 0 && !modelId) {

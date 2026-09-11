@@ -68,6 +68,15 @@ export async function dispatchAll(
 	excludeProviderIds?: string[],
 ): Promise<DispatchResult[]> {
 	if (!modelId) throw new BadRequestError("Model is required");
+	const specificCustomChannelIds = new Set(
+		(providerIds ?? [])
+			.filter((providerId) => providerId.startsWith("custom:"))
+			.map((providerId) => providerId.slice("custom:".length))
+			.filter(Boolean),
+	);
+	const providerFilter = (providerIds ?? []).filter(
+		(providerId) => !providerId.startsWith("custom:"),
+	);
 
 	const catalogDao = new CatalogDao(db);
 	const credDao = new CredentialsDao(db, encryptionKey);
@@ -76,7 +85,16 @@ export async function dispatchAll(
 	const candidates: DispatchResult[] = [];
 
 	for (const offering of offerings) {
-		if (providerIds?.length && !providerIds.includes(offering.provider_id))
+		const customChannelId =
+			offering.provider_id === "custom"
+				? readCustomChannelId(offering.metadata)
+				: null;
+		if (
+			specificCustomChannelIds.size > 0 &&
+			(!customChannelId || !specificCustomChannelIds.has(customChannelId))
+		)
+			continue;
+		if (providerFilter.length > 0 && !providerFilter.includes(offering.provider_id))
 			continue;
 		if (excludeProviderIds?.includes(offering.provider_id)) continue;
 		if (offering.input_price < 0 || offering.output_price < 0) continue;
@@ -87,10 +105,6 @@ export async function dispatchAll(
 			offering.provider_id,
 			ownerId,
 		);
-		const customChannelId =
-			offering.provider_id === "custom"
-				? readCustomChannelId(offering.metadata)
-				: null;
 		if (customChannelId) {
 			credentials = credentials.filter(
 				(credential) => credential.id === customChannelId,
