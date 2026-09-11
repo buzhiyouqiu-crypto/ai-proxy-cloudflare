@@ -15,6 +15,10 @@ import { Badge, Breadcrumb, DualPrice } from "../components/ui";
 import { useFetch } from "../hooks/useFetch";
 import type { ModelEntry } from "../types/model";
 import type { ProviderMeta } from "../types/provider";
+import {
+	expandCustomChannelModels,
+	expandCustomChannelProviders,
+} from "../utils/custom-channels";
 import { formatContext } from "../utils/format";
 import { aggregateProviders } from "../utils/providers";
 
@@ -31,19 +35,41 @@ export function ProviderDetail() {
 	const { data: providersData, loading: providersLoading } = useFetch<
 		ProviderMeta[]
 	>("/api/providers", { requireAuth: false });
-	const { data: adminChannels } = useFetch<AdminChannelSummary[]>(
+	const {
+		data: adminChannels,
+		loading: adminChannelsLoading,
+	} = useFetch<AdminChannelSummary[]>(
 		"/api/admin/channels",
 		{ skip: !isAdmin, staleTime: 0 },
+	);
+
+	const displayModels = useMemo(
+		() =>
+			expandCustomChannelModels(
+				models ?? [],
+				adminChannels,
+				isAdmin === true,
+			),
+		[adminChannels, isAdmin, models],
+	);
+	const displayProviders = useMemo(
+		() =>
+			expandCustomChannelProviders(
+				providersData ?? [],
+				adminChannels,
+				isAdmin === true,
+			),
+		[adminChannels, isAdmin, providersData],
 	);
 
 	const group = useMemo(() => {
 		if (!models || !providersData) return null;
 		return (
-			aggregateProviders(models, providersData).find(
+			aggregateProviders(displayModels, displayProviders).find(
 				(g) => g.provider.id === providerId,
 			) ?? null
 		);
-	}, [models, providersData, providerId]);
+	}, [displayModels, displayProviders, models, providerId, providersData]);
 
 	useEffect(() => {
 		if (group) document.title = `${group.provider.name} — Keyaos`;
@@ -53,7 +79,8 @@ export function ProviderDetail() {
 	}, [group]);
 
 	const loading =
-		(!models || !providersData) && (modelsLoading || providersLoading);
+		((!models || !providersData) && (modelsLoading || providersLoading)) ||
+		(isAdmin === true && adminChannelsLoading);
 
 	if (loading) {
 		return (

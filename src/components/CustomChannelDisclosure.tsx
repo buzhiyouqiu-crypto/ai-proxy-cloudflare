@@ -5,10 +5,7 @@ import { formatUSD } from "../utils/format";
 export interface AdminChannelSummary {
 	id: string;
 	name: string;
-	models: Array<{
-		id: string;
-		catalogModelId?: string | null;
-	}>;
+	models: AdminChannelModelSummary[];
 	quota: number | null;
 	balance: {
 		remaining: number | null;
@@ -17,6 +14,18 @@ export interface AdminChannelSummary {
 		display?: string;
 	} | null;
 	isEnabled: boolean;
+	priceMultiplier?: number;
+}
+
+export interface AdminChannelModelSummary {
+	id: string;
+	catalogModelId?: string | null;
+	catalogName?: string | null;
+	name?: string | null;
+	inputPrice?: number;
+	outputPrice?: number;
+	contextLength?: number | null;
+	modelType?: "chat" | "embedding";
 }
 
 function formatChannelBalance(channel: AdminChannelSummary): string {

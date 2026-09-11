@@ -20,6 +20,10 @@ import { useAutoRefresh } from "../hooks/useAutoRefresh";
 import { useFetch } from "../hooks/useFetch";
 import type { ModelEntry } from "../types/model";
 import type { ProviderMeta } from "../types/provider";
+import {
+	expandCustomChannelModels,
+	expandCustomChannelProviders,
+} from "../utils/custom-channels";
 import { aggregateProviders } from "../utils/providers";
 
 const fmtMultiplier = (v: number) => `×${v.toFixed(2)}`;
@@ -39,7 +43,10 @@ export function Providers() {
 	const { data: providerSparks, refetch: refetchSparks } = useFetch<
 		Record<string, SparklineData>
 	>("/api/sparklines/provider?sample=900000", { requireAuth: false });
-	const { data: adminChannels } = useFetch<AdminChannelSummary[]>(
+	const {
+		data: adminChannels,
+		loading: adminChannelsLoading,
+	} = useFetch<AdminChannelSummary[]>(
 		"/api/admin/channels",
 		{ skip: !isAdmin, staleTime: 0 },
 	);
@@ -51,9 +58,28 @@ export function Providers() {
 
 	const lastUpdated = useAutoRefresh(refetch, models, 600_000);
 
+	const displayModels = useMemo(
+		() =>
+			expandCustomChannelModels(
+				models ?? [],
+				adminChannels,
+				isAdmin === true,
+			),
+		[adminChannels, isAdmin, models],
+	);
+	const displayProviders = useMemo(
+		() =>
+			expandCustomChannelProviders(
+				providersData ?? [],
+				adminChannels,
+				isAdmin === true,
+			),
+		[adminChannels, isAdmin, providersData],
+	);
+
 	const groups = useMemo(
-		() => aggregateProviders(models ?? [], providersData ?? []),
-		[models, providersData],
+		() => aggregateProviders(displayModels, displayProviders),
+		[displayModels, displayProviders],
 	);
 
 	const [query, setQuery] = useState("");
@@ -74,7 +100,8 @@ export function Providers() {
 	}, [adminChannels, groups, isAdmin, query]);
 
 	const initialLoading =
-		(!models || !providersData) && (modelsLoading || providersLoading);
+		((!models || !providersData) && (modelsLoading || providersLoading)) ||
+		(isAdmin === true && adminChannelsLoading);
 
 	return (
 		<div>

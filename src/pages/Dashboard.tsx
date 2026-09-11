@@ -7,8 +7,9 @@ import {
 import { useCallback, useMemo } from "react";
 import { useTranslation } from "react-i18next";
 import { Link, useNavigate } from "react-router-dom";
-import { isPlatform } from "../auth";
+import { isPlatform, useAuth } from "../auth";
 import { CopyButton } from "../components/CopyButton";
+import type { AdminChannelSummary } from "../components/CustomChannelDisclosure";
 import { DirectionBadge } from "../components/DirectionBadge";
 import { ModalityBadges } from "../components/Modalities";
 import { OrgLogo } from "../components/OrgLogo";
@@ -24,6 +25,10 @@ import type { LogEntry } from "../types/log";
 import type { ModelEntry } from "../types/model";
 import type { ProviderMeta } from "../types/provider";
 import { TOKENS } from "../utils/colors";
+import {
+	expandCustomChannelModels,
+	expandCustomChannelProviders,
+} from "../utils/custom-channels";
 import {
 	formatContext,
 	formatRelativeTime,
@@ -44,6 +49,7 @@ interface PoolStats {
 export function Dashboard() {
 	const { t, i18n } = useTranslation();
 	const navigate = useNavigate();
+	const { isAdmin } = useAuth();
 	const formatDateTime = useFormatDateTime();
 
 	const {
@@ -70,6 +76,10 @@ export function Dashboard() {
 	} = useFetch<ProviderMeta[]>("/api/providers", {
 		requireAuth: false,
 	});
+	const { data: adminChannels } = useFetch<AdminChannelSummary[]>(
+		"/api/admin/channels",
+		{ skip: !isAdmin, staleTime: 0 },
+	);
 	const {
 		data: recentLogsResult,
 		loading: logsLoading,
@@ -120,20 +130,39 @@ export function Dashboard() {
 		return new Set(rawModels.map((m) => m.id)).size;
 	}, [rawModels]);
 
+	const displayModels = useMemo(
+		() =>
+			expandCustomChannelModels(
+				rawModels ?? [],
+				adminChannels,
+				isAdmin === true,
+			),
+		[adminChannels, isAdmin, rawModels],
+	);
+	const displayProviders = useMemo(
+		() =>
+			expandCustomChannelProviders(
+				providersData ?? [],
+				adminChannels,
+				isAdmin === true,
+			),
+		[adminChannels, isAdmin, providersData],
+	);
+
 	const allGroups = useMemo(
-		() => aggregateModels(rawModels ?? []),
-		[rawModels],
+		() => aggregateModels(displayModels),
+		[displayModels],
 	);
 	const latestModels = allGroups.slice(0, LATEST_MODELS_LIMIT);
 
 	const providerGroups = useMemo(
-		() => aggregateProviders(rawModels ?? [], providersData ?? []),
-		[rawModels, providersData],
+		() => aggregateProviders(displayModels, displayProviders),
+		[displayModels, displayProviders],
 	);
 
 	const providerMap = useMemo(
-		() => new Map((providersData ?? []).map((m) => [m.id, m])),
-		[providersData],
+		() => new Map(displayProviders.map((m) => [m.id, m])),
+		[displayProviders],
 	);
 
 	const statCards = [

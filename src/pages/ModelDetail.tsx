@@ -25,6 +25,10 @@ import { useFetch } from "../hooks/useFetch";
 import type { ModelEntry } from "../types/model";
 import type { ProviderMeta } from "../types/provider";
 import { TOKENS } from "../utils/colors";
+import {
+	expandCustomChannelModels,
+	expandCustomChannelProviders,
+} from "../utils/custom-channels";
 import { formatContext, formatRelativeTime } from "../utils/format";
 import { aggregateModels } from "../utils/models";
 
@@ -45,14 +49,33 @@ export function ModelDetail() {
 		{ skip: !isAdmin, staleTime: 0 },
 	);
 
+	const displayModels = useMemo(
+		() =>
+			expandCustomChannelModels(
+				rawModels ?? [],
+				adminChannels,
+				isAdmin === true,
+			),
+		[adminChannels, isAdmin, rawModels],
+	);
+	const displayProviders = useMemo(
+		() =>
+			expandCustomChannelProviders(
+				providersData ?? [],
+				adminChannels,
+				isAdmin === true,
+			),
+		[adminChannels, isAdmin, providersData],
+	);
+
 	const group = useMemo(() => {
 		if (!rawModels) return null;
-		return aggregateModels(rawModels).find((g) => g.id === modelId) ?? null;
-	}, [rawModels, modelId]);
+		return aggregateModels(displayModels).find((g) => g.id === modelId) ?? null;
+	}, [displayModels, modelId, rawModels]);
 
 	const providerMap = useMemo(
-		() => new Map((providersData ?? []).map((p) => [p.id, p])),
-		[providersData],
+		() => new Map(displayProviders.map((p) => [p.id, p])),
+		[displayProviders],
 	);
 
 	useEffect(() => {

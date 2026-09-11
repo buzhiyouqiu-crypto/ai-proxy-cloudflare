@@ -2,7 +2,9 @@ import { useCallback, useEffect, useMemo, useState } from "react";
 import { useTranslation } from "react-i18next";
 import { Link, useNavigate, useSearchParams } from "react-router-dom";
 import type { ModelType } from "../../worker/core/db/schema";
+import { useAuth } from "../auth";
 import { CopyButton } from "../components/CopyButton";
+import type { AdminChannelSummary } from "../components/CustomChannelDisclosure";
 import { ModalityBadges } from "../components/Modalities";
 import {
 	applyFilters,
@@ -32,6 +34,10 @@ import {
 	formatPrice,
 	formatRelativeTime,
 } from "../utils/format";
+import {
+	expandCustomChannelModels,
+	expandCustomChannelProviders,
+} from "../utils/custom-channels";
 import { aggregateModels } from "../utils/models";
 
 type TypeTab = "all" | ModelType;
@@ -41,6 +47,7 @@ const DEFAULT_PAGE_SIZE = 20;
 export function Models() {
 	const { t, i18n } = useTranslation();
 	const navigate = useNavigate();
+	const { isAdmin } = useAuth();
 	const {
 		data: raw,
 		loading,
@@ -50,6 +57,10 @@ export function Models() {
 	const { data: providersData } = useFetch<ProviderMeta[]>("/api/providers", {
 		requireAuth: false,
 	});
+	const { data: adminChannels } = useFetch<AdminChannelSummary[]>(
+		"/api/admin/channels",
+		{ skip: !isAdmin, staleTime: 0 },
+	);
 	const { data: inputSparks, refetch: refetchSparks } = useFetch<
 		Record<string, SparklineData>
 	>("/api/sparklines/model:input", { requireAuth: false });
@@ -61,13 +72,32 @@ export function Models() {
 
 	const lastUpdated = useAutoRefresh(refetch, raw, 600_000);
 
+	const displayRaw = useMemo(
+		() =>
+			expandCustomChannelModels(
+				raw ?? [],
+				adminChannels,
+				isAdmin === true,
+			),
+		[adminChannels, isAdmin, raw],
+	);
+	const displayProviders = useMemo(
+		() =>
+			expandCustomChannelProviders(
+				providersData ?? [],
+				adminChannels,
+				isAdmin === true,
+			),
+		[adminChannels, isAdmin, providersData],
+	);
+
 	const providerMap = useMemo(() => {
 		const m = new Map<string, ProviderMeta>();
-		for (const p of providersData ?? []) m.set(p.id, p);
+		for (const p of displayProviders) m.set(p.id, p);
 		return m;
-	}, [providersData]);
+	}, [displayProviders]);
 
-	const groups = useMemo(() => aggregateModels(raw ?? []), [raw]);
+	const groups = useMemo(() => aggregateModels(displayRaw), [displayRaw]);
 
 	// ─── Search ──────────────────────────────────────────
 	const [searchParams] = useSearchParams();
