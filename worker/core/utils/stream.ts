@@ -1,8 +1,10 @@
 /**
  * Stream & JSON Interception Utilities
  *
- * Zero-latency interception of upstream responses via body.tee().
- * The monitor stream runs out-of-band without blocking client delivery.
+ * Zero-latency interception of upstream responses.
+ * SSE bytes are passed through a single reader while usage is parsed from the
+ * same stream. This avoids body.tee(), which can produce unreliable streaming
+ * behavior in some Cloudflare Worker/upstream combinations.
  */
 
 import { log } from "../../shared/logger";
@@ -128,61 +130,117 @@ function interceptSSEStream(
 ): Response {
 	if (!response.body) return response;
 
-	const [clientStream, monitorStream] = response.body.tee();
+	const reader = response.body.getReader();
+	const decoder = new TextDecoder();
+	let buffer = "";
+	let usageReported = false;
+	let finalized = false;
+	let errorReported = false;
+	let drainStarted = false;
 
-	const monitorTask = (async () => {
-		const reader = monitorStream.getReader();
-		const decoder = new TextDecoder();
-		let buffer = "";
-		let usageReported = false;
+	const reportError = (error: unknown) => {
+		if (errorReported) return;
+		errorReported = true;
+		log.error("stream", "Upstream stream error", {
+			error: error instanceof Error ? error.message : String(error),
+		});
+		callbacks.onStreamError?.(error);
+	};
+
+	const consumeFrame = (frame: string) => {
+		for (const line of frame.split("\n")) {
+			const trimmed = line.trim();
+			if (!trimmed.startsWith("data: ") || trimmed === "data: [DONE]")
+				continue;
+
+			try {
+				const data = JSON.parse(trimmed.substring(6));
+				const usage = normalizeUsage(data?.usage);
+				if (usage) {
+					usageReported = true;
+					callbacks.onUsage(usage);
+				}
+			} catch {
+				// Ignore non-JSON SSE frames and partial data frames.
+			}
+		}
+	};
+
+	const consumeFrames = (flush: boolean) => {
+		while (true) {
+			const frameEnd = buffer.indexOf("\n\n");
+			if (frameEnd === -1) break;
+
+			consumeFrame(buffer.slice(0, frameEnd));
+			buffer = buffer.slice(frameEnd + 2);
+		}
+
+		if (flush && buffer.trim()) {
+			consumeFrame(buffer);
+			buffer = "";
+		}
+	};
+
+	const processChunk = (chunk: Uint8Array) => {
+		buffer += decoder.decode(chunk, { stream: true }).replace(/\r\n/g, "\n");
+		consumeFrames(false);
+	};
+
+	const finalize = () => {
+		if (finalized) return;
+		finalized = true;
+		const tail = decoder.decode();
+		if (tail) buffer += tail.replace(/\r\n/g, "\n");
+		consumeFrames(true);
+		if (!usageReported && callbacks.fallbackUsage) {
+			callbacks.onUsage(callbacks.fallbackUsage);
+		}
+		callbacks.onStreamDone?.();
+	};
+
+	const drainRemaining = async () => {
+		if (drainStarted) return;
+		drainStarted = true;
 
 		try {
 			while (true) {
 				const { done, value } = await reader.read();
-				if (done) break;
-
-				buffer += decoder
-					.decode(value, { stream: true })
-					.replace(/\r\n/g, "\n");
-
-				while (true) {
-					const frameEnd = buffer.indexOf("\n\n");
-					if (frameEnd === -1) break;
-
-					const frame = buffer.slice(0, frameEnd);
-					buffer = buffer.slice(frameEnd + 2);
-
-					for (const line of frame.split("\n")) {
-						const trimmed = line.trim();
-						if (!trimmed.startsWith("data: ") || trimmed === "data: [DONE]")
-							continue;
-
-						try {
-							const data = JSON.parse(trimmed.substring(6));
-							const usage = normalizeUsage(data?.usage);
-							if (usage) {
-								usageReported = true;
-								callbacks.onUsage(usage);
-							}
-						} catch {
-							// Partial chunk — ignore
-						}
-					}
+				if (done) {
+					finalize();
+					return;
 				}
+				processChunk(value);
 			}
-			if (!usageReported && callbacks.fallbackUsage) {
-				callbacks.onUsage(callbacks.fallbackUsage);
-			}
-			callbacks.onStreamDone?.();
-		} catch (e) {
-			log.error("stream", "Monitor fatal error", {
-				error: e instanceof Error ? e.message : String(e),
-			});
-			callbacks.onStreamError?.(e);
+		} catch (error) {
+			reportError(error);
 		}
-	})();
+	};
 
-	ctx.waitUntil(monitorTask);
+	const clientStream = new ReadableStream<Uint8Array>({
+		async pull(controller) {
+			try {
+				const { done, value } = await reader.read();
+				if (done) {
+					finalize();
+					controller.close();
+					return;
+				}
+
+				// Enqueue the original bytes unchanged. Parsing happens only as a
+				// side effect, so SSE framing and token deltas reach the client intact.
+				processChunk(value);
+				controller.enqueue(value);
+			} catch (error) {
+				reportError(error);
+				controller.error(error);
+			}
+		},
+		cancel() {
+			// Keep consuming after a client disconnect so usage/billing can still
+			// be collected without teeing the response body.
+			ctx.waitUntil(drainRemaining());
+		},
+	});
 
 	return new Response(clientStream, {
 		status: response.status,
