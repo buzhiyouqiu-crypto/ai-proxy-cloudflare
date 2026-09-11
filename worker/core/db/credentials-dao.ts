@@ -11,6 +11,7 @@ export class CredentialsDao {
 	) {}
 
 	async add(params: {
+		id?: string;
 		owner_id: string;
 		provider_id: string;
 		authType?: "api_key" | "oauth";
@@ -21,7 +22,7 @@ export class CredentialsDao {
 		priceMultiplier?: number;
 		metadata?: Record<string, unknown> | null;
 	}): Promise<DbCredential> {
-		const id = `cred_${crypto.randomUUID()}`;
+		const id = params.id ?? `cred_${crypto.randomUUID()}`;
 		const [encryptedSecret, secretHash] = await Promise.all([
 			encrypt(params.secret, this.encryptionKey),
 			sha256(params.secret),
@@ -99,19 +100,19 @@ export class CredentialsDao {
 	async selectAvailable(
 		providerId: string,
 		ownerId?: string,
+		credentialId?: string,
 	): Promise<DbCredential[]> {
-		const now = Date.now();
-		const ownerClause = ownerId ? "AND owner_id = ? " : "";
-		const binds: (string | number)[] = ownerId
-			? [providerId, ownerId, COOLDOWN_MS, now]
-			: [providerId, COOLDOWN_MS, now];
+		const { where, binds } = this.selectionWhere(
+			providerId,
+			ownerId,
+			credentialId,
+			true,
+		);
 
 		const res = await this.db
 			.prepare(
 				`SELECT * FROM upstream_credentials
-				 WHERE provider_id = ? ${ownerClause}AND is_enabled = 1
-				   AND health_status != 'dead'
-				   AND (health_status != 'cooldown' OR last_health_check + ? < ?)
+				 WHERE ${where}
 				 ORDER BY price_multiplier ASC, COALESCE(quota, 9999999) DESC`,
 			)
 			.bind(...binds)
@@ -127,19 +128,60 @@ export class CredentialsDao {
 	async selectFallback(
 		providerId: string,
 		ownerId?: string,
+		credentialId?: string,
 	): Promise<DbCredential[]> {
-		const ownerClause = ownerId ? "AND owner_id = ? " : "";
-		const binds: string[] = ownerId ? [providerId, ownerId] : [providerId];
+		const { where, binds } = this.selectionWhere(
+			providerId,
+			ownerId,
+			credentialId,
+			false,
+		);
 
 		const res = await this.db
 			.prepare(
 				`SELECT * FROM upstream_credentials
-				 WHERE provider_id = ? ${ownerClause}AND is_enabled = 1
+				 WHERE ${where}
 				 ORDER BY price_multiplier ASC, COALESCE(quota, 9999999) DESC`,
 			)
 			.bind(...binds)
 			.all<DbCredential>();
 		return res.results || [];
+	}
+
+	/**
+	 * Build the common credential-selection predicate. A credential id is used
+	 * for a custom channel so routing does not scan every custom credential and
+	 * filter the result in JavaScript.
+	 */
+	private selectionWhere(
+		providerId: string,
+		ownerId: string | undefined,
+		credentialId: string | undefined,
+		healthAware: boolean,
+	): { where: string; binds: (string | number)[] } {
+		const clauses = ["provider_id = ?"];
+		const binds: (string | number)[] = [providerId];
+
+		if (ownerId) {
+			clauses.push("owner_id = ?");
+			binds.push(ownerId);
+		}
+		if (credentialId) {
+			clauses.push("id = ?");
+			binds.push(credentialId);
+		}
+
+		clauses.push("is_enabled = 1");
+		if (healthAware) {
+			const now = Date.now();
+			clauses.push(
+				"health_status != 'dead'",
+				"(health_status != 'cooldown' OR last_health_check + ? < ?)",
+			);
+			binds.push(COOLDOWN_MS, now);
+		}
+
+		return { where: clauses.join(" AND "), binds };
 	}
 
 	async getAll(owner_id: string): Promise<DbCredential[]> {
@@ -166,7 +208,7 @@ export class CredentialsDao {
 				         WHEN quota IS NOT NULL AND quota - ? <= 0 THEN 'degraded'
 				         ELSE health_status
 				     END
-				 WHERE id = ?`,
+				 WHERE id = ? AND quota IS NOT NULL`,
 			)
 			.bind(amount, amount, id)
 			.run();

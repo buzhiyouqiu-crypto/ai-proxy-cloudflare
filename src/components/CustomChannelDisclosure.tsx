@@ -4,6 +4,8 @@ import { formatUSD } from "../utils/format";
 
 export interface AdminChannelSummary {
 	id: string;
+	publicProviderId?: string;
+	publicName?: string;
 	name: string;
 	models: AdminChannelModelSummary[];
 	quota: number | null;

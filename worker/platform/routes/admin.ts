@@ -16,6 +16,12 @@ import {
 } from "../../core/sync/sync-service";
 import { purgePublicCaches } from "../../shared/cache";
 import { briefHint, decrypt, mask } from "../../shared/crypto";
+import {
+	encryptCustomChannelName,
+	publicCustomChannelName,
+	publicCustomChannelProviderId,
+	resolveCustomChannelName,
+} from "../../shared/custom-channel-identity";
 import { BadRequestError } from "../../shared/errors";
 import {
 	isMonetaryBalance,
@@ -295,18 +301,25 @@ admin.post("/remask", async (c) => {
 // ─── Administrator-managed OpenAI-compatible channels ────
 
 admin.get("/channels", async (c) => {
+	const encryptionKey = c.env.ENCRYPTION_KEY;
 	const rows = await new CredentialsDao(
 		c.env.DB,
-		c.env.ENCRYPTION_KEY,
+		encryptionKey,
 	).getGlobal();
-	return c.json({
-		data: rows
+	const channels = await Promise.all(
+		rows
 			.filter((row) => row.provider_id === "custom")
-			.map((row) => {
+			.map(async (row) => {
 				const channel = parseCustomChannelMetadata(row.metadata);
 				return {
 					id: row.id,
-					name: channel?.name ?? "自定义渠道",
+					publicProviderId: publicCustomChannelProviderId(row.id),
+					publicName: publicCustomChannelName(row.id),
+					name: await resolveCustomChannelName(
+						channel,
+						row.id,
+						encryptionKey,
+					),
 					baseUrl: channel?.baseUrl ?? "",
 					requiresApiKey: channel?.requiresApiKey !== false,
 					websiteUrl: channel?.websiteUrl ?? null,
@@ -324,6 +337,9 @@ admin.get("/channels", async (c) => {
 					addedAt: row.added_at,
 				};
 			}),
+	);
+	return c.json({
+		data: channels,
 	});
 });
 
@@ -633,7 +649,8 @@ admin.post("/channels", async (c) => {
 
 	const metadata = {
 		type: "custom_openai" as const,
-		name: body.name,
+		name: "",
+		nameCiphertext: "",
 		baseUrl: body.baseUrl.replace(/\/+$/, ""),
 		requiresApiKey,
 		models: body.models,
@@ -647,7 +664,14 @@ admin.post("/channels", async (c) => {
 		throw new BadRequestError("This upstream key is already configured", "credential_duplicate");
 	}
 
+	const id = `cred_${crypto.randomUUID()}`;
+	metadata.name = publicCustomChannelName(id);
+	metadata.nameCiphertext = await encryptCustomChannelName(
+		body.name,
+		c.env.ENCRYPTION_KEY,
+	);
 	const credential = await dao.add({
+		id,
 		owner_id: c.get("owner_id"),
 		provider_id: "custom",
 		secret,
@@ -746,9 +770,18 @@ admin.patch("/channels/:id", async (c) => {
 		if (!current) {
 			throw new BadRequestError("Invalid custom channel metadata", "channel_invalid");
 		}
+		const currentName = await resolveCustomChannelName(
+			current,
+			id,
+			c.env.ENCRYPTION_KEY,
+		);
 		const metadata = {
 			...current,
-			name: body.name ?? current.name,
+			name: publicCustomChannelName(id),
+			nameCiphertext: await encryptCustomChannelName(
+				body.name ?? currentName,
+				c.env.ENCRYPTION_KEY,
+			),
 			baseUrl: body.baseUrl?.replace(/\/+$/, "") ?? current.baseUrl,
 			requiresApiKey:
 				body.requiresApiKey ?? current.requiresApiKey !== false,

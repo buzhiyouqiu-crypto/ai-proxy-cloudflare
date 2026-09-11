@@ -83,6 +83,7 @@ export async function dispatchAll(
 
 	const offerings = await catalogDao.findByModelId(modelId);
 	const candidates: DispatchResult[] = [];
+	const credentialCache = new Map<string, DbCredential[]>();
 
 	for (const offering of offerings) {
 		const customChannelId =
@@ -101,25 +102,30 @@ export async function dispatchAll(
 		const registeredProvider = getProvider(offering.provider_id);
 		if (!registeredProvider && offering.provider_id !== "custom") continue;
 
-		let credentials = await credDao.selectAvailable(
+		const selectionKey = [
 			offering.provider_id,
-			ownerId,
-		);
-		if (customChannelId) {
-			credentials = credentials.filter(
-				(credential) => credential.id === customChannelId,
+			ownerId ?? "*",
+			customChannelId ?? "*",
+		].join("\0");
+		let credentials = credentialCache.get(selectionKey);
+		if (!credentials) {
+			credentials = await credDao.selectAvailable(
+				offering.provider_id,
+				ownerId,
+				customChannelId ?? undefined,
 			);
+			credentialCache.set(selectionKey, credentials);
 		}
 
 		// Fallback: if no healthy credentials, try unhealthy ones (dead/cooldown).
 		// A degraded attempt is better than a guaranteed 503.
 		if (credentials.length === 0) {
-			credentials = await credDao.selectFallback(offering.provider_id, ownerId);
-			if (customChannelId) {
-				credentials = credentials.filter(
-					(credential) => credential.id === customChannelId,
-				);
-			}
+			credentials = await credDao.selectFallback(
+				offering.provider_id,
+				ownerId,
+				customChannelId ?? undefined,
+			);
+			credentialCache.set(selectionKey, credentials);
 		}
 
 		for (const credential of credentials) {

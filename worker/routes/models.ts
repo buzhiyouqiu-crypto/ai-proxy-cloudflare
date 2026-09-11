@@ -3,6 +3,10 @@ import { CandleDao } from "../core/db/candle-dao";
 import { CatalogDao } from "../core/db/catalog-dao";
 import { getVisibleProviders } from "../core/providers/registry";
 import { edgeCache } from "../shared/cache";
+import {
+	publicCustomChannelProviderId,
+	CUSTOM_PROVIDER_ID,
+} from "../shared/custom-channel-identity";
 import type { AppEnv } from "../shared/types";
 
 /**
@@ -75,17 +79,23 @@ publicModelsRouter.get("/", async (c) => {
 	const dao = new CatalogDao(c.env.DB);
 	const candleDao = new CandleDao(c.env.DB);
 
-	const [all, inputPrices, outputPrices, customChannel] = await Promise.all([
+	const [all, inputPrices, outputPrices, customChannels] = await Promise.all([
 		dao.getActiveWithBestMultiplier(),
 		candleDao.getLatestPrices("model:input"),
 		candleDao.getLatestPrices("model:output"),
 		c.env.DB.prepare(
-			"SELECT 1 FROM upstream_credentials WHERE provider_id = 'custom' AND is_enabled = 1 LIMIT 1",
-		).first(),
+			"SELECT id FROM upstream_credentials WHERE provider_id = 'custom' AND is_enabled = 1",
+		).all<{ id: string }>(),
 	]);
 
 	const visibleIds = new Set(getVisibleProviders().map((p) => p.info.id));
-	if (customChannel) visibleIds.add("custom");
+	if ((customChannels.results ?? []).length > 0) visibleIds.add(CUSTOM_PROVIDER_ID);
+	const publicCustomProviders = new Map(
+		(customChannels.results ?? []).map((row) => [
+			row.id,
+			publicCustomChannelProviderId(row.id),
+		]),
+	);
 
 	// USD-per-M-tokens → USD-per-token string (OpenRouter format)
 	const toUsdPerToken = (usdPerM: number) => String(usdPerM / 1_000_000);
@@ -104,6 +114,15 @@ publicModelsRouter.get("/", async (c) => {
 
 	for (const row of all) {
 		if (!visibleIds.has(row.provider_id)) continue;
+		const customChannelId =
+			row.provider_id === CUSTOM_PROVIDER_ID
+				? readCatalogChannelId(row.metadata)
+				: null;
+		const publicProviderId =
+			row.provider_id === CUSTOM_PROVIDER_ID && customChannelId
+				? publicCustomProviders.get(customChannelId)
+				: row.provider_id;
+		if (!publicProviderId) continue;
 
 		let g = groups.get(row.model_id);
 		if (!g) {
@@ -119,8 +138,8 @@ publicModelsRouter.get("/", async (c) => {
 		}
 
 		if (row.best_multiplier != null) {
-			if (!g.providers.includes(row.provider_id))
-				g.providers.push(row.provider_id);
+			if (!g.providers.includes(publicProviderId))
+				g.providers.push(publicProviderId);
 		}
 	}
 
@@ -192,26 +211,41 @@ dashboardModelsRouter.get("/", edgeCache(3600), async (c) => {
 	const dao = new CatalogDao(c.env.DB);
 	const candleDao = new CandleDao(c.env.DB);
 
-	const [all, providerMuls, customChannel] = await Promise.all([
+	const [all, providerMuls, customChannels] = await Promise.all([
 		dao.getActiveWithBestMultiplier(),
 		candleDao.getLatestPrices("provider"),
 		c.env.DB.prepare(
-			"SELECT 1 FROM upstream_credentials WHERE provider_id = 'custom' AND is_enabled = 1 LIMIT 1",
-		).first(),
+			"SELECT id FROM upstream_credentials WHERE provider_id = 'custom' AND is_enabled = 1",
+		).all<{ id: string }>(),
 	]);
 
 	const visibleIds = new Set(getVisibleProviders().map((p) => p.info.id));
-	if (customChannel) visibleIds.add("custom");
+	if ((customChannels.results ?? []).length > 0) visibleIds.add(CUSTOM_PROVIDER_ID);
+	const publicCustomProviders = new Map(
+		(customChannels.results ?? []).map((row) => [
+			row.id,
+			publicCustomChannelProviderId(row.id),
+		]),
+	);
 
 	const data = all
 		.filter((m) => visibleIds.has(m.provider_id))
 		.map((m) => {
+			const customChannelId =
+				m.provider_id === CUSTOM_PROVIDER_ID
+					? readCatalogChannelId(m.metadata)
+					: null;
+			const providerId =
+				m.provider_id === CUSTOM_PROVIDER_ID && customChannelId
+					? publicCustomProviders.get(customChannelId)
+					: m.provider_id;
+			if (!providerId) return null;
 			const mul = providerMuls.get(m.provider_id) ?? m.best_multiplier;
 			const meta = m.metadata ? JSON.parse(m.metadata) : null;
 			return {
 				id: m.model_id,
 				type: m.model_type,
-				provider_id: m.provider_id,
+				provider_id: providerId,
 				name: m.name,
 				description: cleanDescription(meta?.description),
 				input_price: m.input_price,
@@ -231,7 +265,20 @@ dashboardModelsRouter.get("/", edgeCache(3600), async (c) => {
 					: null,
 				supported_parameters: (meta?.supported_parameters as string[]) ?? null,
 			};
-		});
+		})
+		.filter((entry): entry is NonNullable<typeof entry> => entry !== null);
 
 	return c.json({ data });
 });
+
+function readCatalogChannelId(metadata: string | null): string | null {
+	if (!metadata) return null;
+	try {
+		const value = JSON.parse(metadata) as { channelId?: unknown };
+		return typeof value.channelId === "string" && value.channelId
+			? value.channelId
+			: null;
+	} catch {
+		return null;
+	}
+}

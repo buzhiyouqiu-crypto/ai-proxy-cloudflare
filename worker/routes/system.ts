@@ -8,6 +8,10 @@ import {
 	getVisibleProviders,
 } from "../core/providers/registry";
 import { edgeCache } from "../shared/cache";
+import {
+	publicCustomChannelName,
+	publicCustomChannelProviderId,
+} from "../shared/custom-channel-identity";
 import type { AppEnv } from "../shared/types";
 
 const systemRouter = new Hono<AppEnv>();
@@ -57,17 +61,13 @@ systemRouter.get("/providers", async (c) => {
 		credentialGuide: p.info.credentialGuide ?? null,
 	}));
 	const customChannels = await c.env.DB.prepare(
-		"SELECT metadata FROM upstream_credentials WHERE provider_id = 'custom' AND is_enabled = 1",
-	).all<{ metadata: string | null }>();
-	const customNames = (customChannels.results ?? [])
-		.map((row) => parseCustomChannelMetadata(row.metadata)?.name)
-		.filter((name): name is string => Boolean(name));
-	if (customNames.length > 0) {
+		"SELECT id, metadata FROM upstream_credentials WHERE provider_id = 'custom' AND is_enabled = 1",
+	).all<{ id: string; metadata: string | null }>();
+	for (const row of customChannels.results ?? []) {
+		if (!parseCustomChannelMetadata(row.metadata)) continue;
 		providers.push({
-			id: "custom",
-			// Channel names and balances are administrator-only data. Keep the
-			// public provider catalog intentionally generic.
-			name: "自定义渠道",
+			id: publicCustomChannelProviderId(row.id),
+			name: publicCustomChannelName(row.id),
 			logoUrl: "https://api.iconify.design/mdi:server-network.svg",
 			supportsAutoCredits: false,
 			authType: "api_key",

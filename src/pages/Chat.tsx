@@ -30,6 +30,7 @@ import {
 } from "../hooks/useThreadRuntime";
 import type { ModelEntry } from "../types/model";
 import type { ProviderMeta } from "../types/provider";
+import { PUBLIC_CUSTOM_CHANNEL_PREFIX } from "../utils/custom-channels";
 
 const LS_MODEL_KEY = "kx-chat-model";
 const LS_PROVIDER_KEY = "kx-chat-provider";
@@ -97,6 +98,8 @@ export function Chat() {
 	modelIdRef.current = modelId;
 	const providerIdRef = useRef(providerId);
 	providerIdRef.current = providerId;
+	const isAdminRef = useRef(isAdmin);
+	isAdminRef.current = isAdmin;
 	const systemPromptRef = useRef(systemPrompt);
 	systemPromptRef.current = systemPrompt;
 
@@ -115,7 +118,12 @@ export function Chat() {
 				body: () => ({
 					model_id: modelIdRef.current,
 					...(providerIdRef.current !== AUTO_PROVIDER && {
-						provider_ids: [providerIdRef.current],
+						provider_ids: [
+							isAdminRef.current !== true &&
+							providerIdRef.current.startsWith(PUBLIC_CUSTOM_CHANNEL_PREFIX)
+								? CUSTOM_PROVIDER
+								: providerIdRef.current,
+						],
 					}),
 					...(systemPromptRef.current && {
 						system: systemPromptRef.current,

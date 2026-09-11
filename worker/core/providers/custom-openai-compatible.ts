@@ -22,6 +22,8 @@ export interface CustomChannelModel {
 export interface CustomChannelMetadata {
 	type: "custom_openai";
 	name: string;
+	/** Public alias; the real channel name is kept in nameCiphertext. */
+	nameCiphertext?: string | null;
 	baseUrl: string;
 	models: CustomChannelModel[];
 	/** Defaults to true for channels created before this field existed. */

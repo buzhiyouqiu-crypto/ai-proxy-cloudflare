@@ -30,6 +30,7 @@ import {
 	ModelNotAllowedError,
 	NoKeyAvailableError,
 } from "../shared/errors";
+import { isPublicCustomChannelProviderId } from "../shared/custom-channel-identity";
 import { requestLogger } from "../shared/logger";
 import type { AppEnv } from "../shared/types";
 
@@ -152,11 +153,16 @@ async function execute(
 	const requestId = crypto.randomUUID();
 	const rlog = requestLogger(requestId, { modelId: req.modelId, consumerId });
 	const encryptionKey = c.env.ENCRYPTION_KEY;
-	const specificCustomChannelRequested = (req.providerIds ?? []).some((id) =>
-		id.startsWith("custom:"),
-	);
 	const canSelectSpecificCustomChannel =
 		!isPlatform || consumerId === c.env.PLATFORM_OWNER_ID;
+	const providerIds = (req.providerIds ?? []).map((id) =>
+		!canSelectSpecificCustomChannel && isPublicCustomChannelProviderId(id)
+			? "custom"
+			: id,
+	);
+	const specificCustomChannelRequested = providerIds.some((id) =>
+		id.startsWith("custom:"),
+	);
 	if (specificCustomChannelRequested && !canSelectSpecificCustomChannel) {
 		throw new ApiError(
 			"Selecting a specific custom channel is restricted to the platform owner",
@@ -189,7 +195,7 @@ async function execute(
 		encryptionKey,
 		req.modelId,
 		poolOwnerId,
-		req.providerIds,
+		providerIds,
 		excludeProviderIds,
 	).catch((err) => {
 		if (creditsFallback && err instanceof NoKeyAvailableError) {

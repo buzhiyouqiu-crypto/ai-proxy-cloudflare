@@ -429,13 +429,13 @@
       "bearerAuth": {
         "type": "http",
         "scheme": "bearer",
-        "description": "API key as Bearer token: `Authorization: Bearer sk-keyaos-xxxxx`"
+        "description": "API key as Bearer token: `Authorization: Bearer sk-keyloomai-xxxxx`"
       },
       "apiKeyHeader": {
         "type": "apiKey",
         "in": "header",
         "name": "x-api-key",
-        "description": "API key via header: `x-api-key: sk-keyaos-xxxxx`"
+        "description": "API key via header: `x-api-key: sk-keyloomai-xxxxx`"
       }
     },
     "schemas": {

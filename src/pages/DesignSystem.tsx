@@ -465,7 +465,7 @@ export function DesignSystem() {
 										[
 											"mono / text-xs / muted",
 											"font-mono text-xs text-gray-500 dark:text-gray-400",
-											"sk-keyaos-a1b2c3d4e5f6 → 200 OK  42ms  gpt-4o",
+										"sk-keyloomai-a1b2c3d4e5f6 → 200 OK  42ms  gpt-4o",
 										],
 									] as const
 								).map(([label, cls, text]) => (

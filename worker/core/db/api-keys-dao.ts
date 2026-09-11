@@ -30,7 +30,9 @@ export class ApiKeysDao {
 		opts: CreateKeyOptions,
 	): Promise<{ record: DbApiKey; plainKey: string }> {
 		const id = `key_${crypto.randomUUID().replace(/-/g, "")}`;
-		const plainKey = `sk-keyaos-${crypto.randomUUID().replace(/-/g, "")}`;
+		// Keyloom-issued downstream keys use a branded prefix. Existing keys remain
+		// valid because authentication is based on the stored SHA-256 hash.
+		const plainKey = `sk-keyloomai-${crypto.randomUUID().replace(/-/g, "")}`;
 
 		const [keyHash, encryptedKey] = await Promise.all([
 			sha256(plainKey),

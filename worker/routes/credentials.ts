@@ -10,6 +10,10 @@ import {
 	writeBalanceSnapshot,
 } from "../shared/provider-balance";
 import { sha256 } from "../shared/crypto";
+import {
+	publicCustomChannelName,
+	resolveCustomChannelName,
+} from "../shared/custom-channel-identity";
 import { ApiError, BadRequestError } from "../shared/errors";
 import type { AppEnv } from "../shared/types";
 import { parse } from "../shared/validate";
@@ -157,12 +161,14 @@ credentialsRouter.post("/", async (c) => {
 
 credentialsRouter.get("/", async (c) => {
 	const ownerId = c.get("owner_id");
+	const canViewPrivateChannelNames =
+		!c.env.CLERK_SECRET_KEY || ownerId === c.env.PLATFORM_OWNER_ID;
 	const [all, earnings] = await Promise.all([
 		new CredentialsDao(c.env.DB, c.env.ENCRYPTION_KEY).getAll(ownerId),
 		new LogsDao(c.env.DB).getEarningsByCredential(ownerId),
 	]);
-	return c.json({
-		data: all.map((cred) => {
+	const data = await Promise.all(
+		all.map(async (cred) => {
 			const customChannel =
 				cred.provider_id === "custom"
 					? parseCustomChannelMetadata(cred.metadata)
@@ -170,7 +176,15 @@ credentialsRouter.get("/", async (c) => {
 			return {
 				id: cred.id,
 				provider_id: cred.provider_id,
-				channelName: customChannel?.name ?? null,
+				channelName: customChannel
+					? canViewPrivateChannelNames
+						? await resolveCustomChannelName(
+								customChannel,
+								cred.id,
+								c.env.ENCRYPTION_KEY,
+							)
+						: publicCustomChannelName(cred.id)
+					: null,
 				authType: cred.auth_type,
 				secretHint: cred.secret_hint,
 				quota: cred.quota,
@@ -183,7 +197,8 @@ credentialsRouter.get("/", async (c) => {
 				earnings: earnings.get(cred.id) ?? 0,
 			};
 		}),
-	});
+	);
+	return c.json({ data });
 });
 
 credentialsRouter.patch("/:id/quota", async (c) => {
