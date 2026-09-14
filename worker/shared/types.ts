@@ -13,6 +13,9 @@ export type Env = {
 	STRIPE_SECRET_KEY?: string;
 	STRIPE_WEBHOOK_SECRET?: string;
 	ASSETS?: Fetcher;
+	/** R2 bucket for opaque, short-lived generated image objects. */
+	IMAGE_BUCKET?: R2Bucket;
+	IMAGE_PROXY_TTL_SECONDS?: string;
 	/** System-level API keys for dynamic model sync (provider /models endpoints) */
 	DEEPSEEK_KEY?: string;
 	MINIMAX_KEY?: string;

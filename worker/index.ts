@@ -9,6 +9,7 @@ import {
 	syncAutoCredits,
 	syncFromRemote,
 } from "./core/sync/sync-service";
+import { purgeExpiredImages } from "./core/utils/image-proxy";
 import { sweepAutoTopUp } from "./platform/billing/auto-topup-service";
 import adminRouter from "./platform/routes/admin";
 import creditsRouter, { webhookRouter } from "./platform/routes/credits";
@@ -18,13 +19,14 @@ import chatRouter from "./routes/chat";
 import credentialsRouter from "./routes/credentials";
 import embeddingsRouter from "./routes/embeddings";
 import imagesRouter from "./routes/images";
+import mediaRouter from "./routes/media";
 import messagesRouter from "./routes/messages";
-import responsesRouter from "./routes/responses";
 import {
 	catalogRouter,
 	dashboardModelsRouter,
 	publicModelsRouter,
 } from "./routes/models";
+import responsesRouter from "./routes/responses";
 import systemRouter from "./routes/system";
 import threadsRouter from "./routes/threads";
 import { sha256 } from "./shared/crypto";
@@ -339,6 +341,9 @@ app.route("/api/webhooks", webhookRouter);
 app.route("/v1/chat", chatRouter);
 app.route("/v1/embeddings", embeddingsRouter);
 app.route("/v1/images", imagesRouter);
+// Generated image URLs are opaque, short-lived capabilities. This route is
+// intentionally outside /v1 so an <img> element can load it without headers.
+app.route("/media", mediaRouter);
 app.route("/v1/models", publicModelsRouter);
 app.route("/v1/responses", responsesRouter);
 
@@ -396,6 +401,7 @@ export default {
 						}
 						await syncAutoCredits(env.DB, env.ENCRYPTION_KEY, rate);
 						await candleDao.pruneOldCandles();
+						if (env.IMAGE_BUCKET) await purgeExpiredImages(env.IMAGE_BUCKET);
 					})()
 				: (async () => {
 						await candleDao.aggregate(Date.now() - 60_000);

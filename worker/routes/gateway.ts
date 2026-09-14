@@ -17,6 +17,7 @@ import * as cb from "../core/circuit-breaker";
 import { ApiKeysDao } from "../core/db/api-keys-dao";
 import { CredentialsDao } from "../core/db/credentials-dao";
 import { dispatchAll } from "../core/dispatcher";
+import { proxyImageResponse } from "../core/utils/image-proxy";
 import { interceptResponse } from "../core/utils/stream";
 import { triggerAutoTopUp } from "../platform/billing/auto-topup-service";
 import {
@@ -335,6 +336,16 @@ async function execute(
 				continue;
 			}
 
+			const responseForClient =
+				mode === "image-generation" || mode === "image-edit"
+					? await proxyImageResponse(
+							response,
+							c.env.IMAGE_BUCKET,
+							c.req.url,
+							c.env.IMAGE_PROXY_TTL_SECONDS,
+						)
+					: response;
+
 			const latencyMs = Date.now() - t0;
 			const credentialOwnerId = credential.owner_id;
 			const isSelfUse = consumerId === credentialOwnerId;
@@ -346,84 +357,88 @@ async function execute(
 				latencyMs,
 			});
 
-			const finalResponse = interceptResponse(response, c.executionCtx, {
-				fallbackUsage,
-				onUsage: (usage) => {
-					c.executionCtx.waitUntil(
-						(async () => {
-							const baseCost = calculateBaseCost(modelPrice, usage);
-							const settlement = isPlatform
-								? calculateSettlement(baseCost, isSelfUse)
-								: {
-										consumerCharged: 0,
-										providerEarned: 0,
-										platformFee: 0,
-									};
+			const finalResponse = interceptResponse(
+				responseForClient,
+				c.executionCtx,
+				{
+					fallbackUsage,
+					onUsage: (usage) => {
+						c.executionCtx.waitUntil(
+							(async () => {
+								const baseCost = calculateBaseCost(modelPrice, usage);
+								const settlement = isPlatform
+									? calculateSettlement(baseCost, isSelfUse)
+									: {
+											consumerCharged: 0,
+											providerEarned: 0,
+											platformFee: 0,
+										};
 
-							await recordLog(c.env.DB, encryptionKey, {
-								consumerId,
-								credentialId: credential.id,
-								credentialOwnerId,
-								providerId: credential.provider_id,
-								modelId,
-								baseCost,
-								inputTokens: usage.prompt_tokens,
-								outputTokens: usage.completion_tokens,
-								priceMultiplier: credential.price_multiplier,
-								settlement,
-							});
-
-							if (isPlatform && !isSelfUse) {
-								await settleWallets(
-									c.env.DB,
+								await recordLog(c.env.DB, encryptionKey, {
 									consumerId,
+									credentialId: credential.id,
 									credentialOwnerId,
+									providerId: credential.provider_id,
+									modelId,
+									baseCost,
+									inputTokens: usage.prompt_tokens,
+									outputTokens: usage.completion_tokens,
+									priceMultiplier: credential.price_multiplier,
 									settlement,
-								);
-								if (c.env.STRIPE_SECRET_KEY) {
-									await triggerAutoTopUp(
+								});
+
+								if (isPlatform && !isSelfUse) {
+									await settleWallets(
 										c.env.DB,
-										c.env.STRIPE_SECRET_KEY,
 										consumerId,
+										credentialOwnerId,
+										settlement,
 									);
+									if (c.env.STRIPE_SECRET_KEY) {
+										await triggerAutoTopUp(
+											c.env.DB,
+											c.env.STRIPE_SECRET_KEY,
+											consumerId,
+										);
+									}
 								}
-							}
 
-							if (apiKeyId) {
-								await new ApiKeysDao(
-									c.env.DB,
-									encryptionKey,
-								).incrementQuotaUsed(apiKeyId, baseCost);
-							}
+								if (apiKeyId) {
+									await new ApiKeysDao(
+										c.env.DB,
+										encryptionKey,
+									).incrementQuotaUsed(apiKeyId, baseCost);
+								}
 
-							rlog.info("billing", "Recorded", {
-								providerId: credential.provider_id,
-								baseCost,
-								inputTokens: usage.prompt_tokens,
-								outputTokens: usage.completion_tokens,
-							});
-						})().catch((err) =>
-							rlog.error("billing", "waitUntil failed", {
-								error: err instanceof Error ? err.message : String(err),
-							}),
-						),
-					);
+								rlog.info("billing", "Recorded", {
+									providerId: credential.provider_id,
+									baseCost,
+									inputTokens: usage.prompt_tokens,
+									outputTokens: usage.completion_tokens,
+								});
+							})().catch((err) =>
+								rlog.error("billing", "waitUntil failed", {
+									error: err instanceof Error ? err.message : String(err),
+								}),
+							),
+						);
+					},
+					onStreamDone: () => {
+						cb.recordSuccess(provider.info.id, modelId);
+						c.executionCtx.waitUntil(credDao.reportSuccess(credential.id));
+					},
+					onStreamError: (err) => {
+						rlog.warn("gateway", "Stream interrupted after 200", {
+							providerId: provider.info.id,
+							credentialId: credential.id,
+							error: err instanceof Error ? err.message : String(err),
+						});
+						c.executionCtx.waitUntil(
+							credDao.reportFailure(credential.id, undefined, isSub),
+						);
+					},
 				},
-				onStreamDone: () => {
-					cb.recordSuccess(provider.info.id, modelId);
-					c.executionCtx.waitUntil(credDao.reportSuccess(credential.id));
-				},
-				onStreamError: (err) => {
-					rlog.warn("gateway", "Stream interrupted after 200", {
-						providerId: provider.info.id,
-						credentialId: credential.id,
-						error: err instanceof Error ? err.message : String(err),
-					});
-					c.executionCtx.waitUntil(
-						credDao.reportFailure(credential.id, undefined, isSub),
-					);
-				},
-			});
+			);
 
 			return {
 				response: finalResponse,
@@ -432,6 +447,7 @@ async function execute(
 				credentialId: credential.id,
 			};
 		} catch (err) {
+			if (err instanceof ApiError) throw err;
 			await credDao.reportFailure(credential.id, undefined, isSub);
 			cb.recordFailure(provider.info.id, modelId);
 
