@@ -1,6 +1,7 @@
 import {
 	ArrowPathIcon,
 	ClipboardDocumentIcon,
+	DocumentDuplicateIcon,
 	EyeIcon,
 	EyeSlashIcon,
 	PencilSquareIcon,
@@ -11,6 +12,7 @@ import { useState } from "react";
 import toast from "react-hot-toast";
 import { Trans, useTranslation } from "react-i18next";
 import { useAuth } from "../auth";
+import { CloneApiKeyModal } from "../components/CloneApiKeyModal";
 import { CreateApiKeyModal } from "../components/CreateApiKeyModal";
 import { EditApiKeyModal } from "../components/EditApiKeyModal";
 import { ToggleSwitch } from "../components/ToggleSwitch";
@@ -88,6 +90,7 @@ export function ApiKeys() {
 
 	const [isAddOpen, setIsAddOpen] = useState(false);
 	const [editKey, setEditKey] = useState<ApiKeyInfo | null>(null);
+	const [cloneKey, setCloneKey] = useState<ApiKeyInfo | null>(null);
 	const [revealedKeys, setRevealedKeys] = useState<Map<string, string>>(
 		new Map(),
 	);
@@ -249,6 +252,13 @@ export function ApiKeys() {
 				onUpdated={refetch}
 			/>
 
+			<CloneApiKeyModal
+				open={!!cloneKey}
+				onClose={() => setCloneKey(null)}
+				apiKey={cloneKey}
+				onCreated={refetch}
+			/>
+
 			<div className="mt-8 flow-root">
 				<div className="-mx-4 -my-2 overflow-x-auto sm:-mx-6 lg:-mx-8">
 					<div className="inline-block min-w-full py-2 align-middle sm:px-6 lg:px-8">
@@ -397,6 +407,14 @@ export function ApiKeys() {
 												{/* Actions */}
 												<td className="relative whitespace-nowrap py-4 pl-3 pr-4 text-right text-sm font-medium sm:pr-6">
 													<div className="flex items-center justify-end gap-2">
+														<button
+															type="button"
+															onClick={() => setCloneKey(k)}
+															className="rounded-md p-1 text-gray-400 transition-colors hover:bg-gray-100 hover:text-brand-500 dark:hover:bg-white/10"
+															title={t("api_keys.clone")}
+														>
+															<DocumentDuplicateIcon className="size-4" />
+														</button>
 														<button
 															type="button"
 															onClick={() => setEditKey(k)}

@@ -18,6 +18,18 @@ export interface UpdateKeyFields {
 	allowed_ips?: string[] | null;
 }
 
+export interface CloneKeyOptions {
+	count: number;
+	name_rule: "random" | "prefix_sequence";
+	prefix?: string;
+	start_number?: number;
+}
+
+export interface CreatedApiKey {
+	record: DbApiKey;
+	plainKey: string;
+}
+
 export class ApiKeysDao {
 	constructor(
 		private db: D1Database,
@@ -73,6 +85,87 @@ export class ApiKeysDao {
 			.first<DbApiKey>();
 		if (!record) throw new Error("Failed to create downstream API key");
 		return { record, plainKey };
+	}
+
+	/** Clone a key's restrictions while issuing fresh independent secrets. */
+	async cloneKeys(
+		owner_id: string,
+		sourceId: string,
+		opts: CloneKeyOptions,
+	): Promise<CreatedApiKey[] | null> {
+		const source = await this.db
+			.prepare(
+				"SELECT expires_at, quota_limit, allowed_models, allowed_ips FROM api_keys WHERE id = ? AND owner_id = ?",
+			)
+			.bind(sourceId, owner_id)
+			.first<
+				Pick<
+					DbApiKey,
+					"expires_at" | "quota_limit" | "allowed_models" | "allowed_ips"
+				>
+			>();
+		if (!source) return null;
+
+		const names = Array.from({ length: opts.count }, (_, index) => {
+			if (opts.name_rule === "prefix_sequence") {
+				return `${opts.prefix ?? "key-"}${(opts.start_number ?? 1) + index}`;
+			}
+			return `Key-${crypto.randomUUID().replace(/-/g, "").slice(0, 8)}`;
+		});
+
+		const created = await Promise.all(
+			names.map(async (name): Promise<CreatedApiKey> => {
+				const id = `key_${crypto.randomUUID().replace(/-/g, "")}`;
+				const plainKey = `sk-keyloomai-${crypto.randomUUID().replace(/-/g, "")}`;
+				const [keyHash, encryptedKey] = await Promise.all([
+					sha256(plainKey),
+					encrypt(plainKey, this.encryptionKey),
+				]);
+				const record: DbApiKey = {
+					id,
+					owner_id,
+					name,
+					key_hash: keyHash,
+					encrypted_key: encryptedKey,
+					key_hint: mask(plainKey, 10, 4),
+					is_enabled: 1,
+					expires_at: source.expires_at,
+					quota_limit: source.quota_limit,
+					quota_used: 0,
+					allowed_models: source.allowed_models,
+					allowed_ips: source.allowed_ips,
+					created_at: Date.now(),
+				};
+				return { record, plainKey };
+			}),
+		);
+
+		await this.db.batch(
+			created.map(({ record }) =>
+				this.db
+					.prepare(
+						`INSERT INTO api_keys (id, owner_id, name, key_hash, encrypted_key, key_hint, is_enabled, expires_at, quota_limit, quota_used, allowed_models, allowed_ips, created_at)
+						 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+					)
+					.bind(
+						record.id,
+						record.owner_id,
+						record.name,
+						record.key_hash,
+						record.encrypted_key,
+						record.key_hint,
+						record.is_enabled,
+						record.expires_at,
+						record.quota_limit,
+						record.quota_used,
+						record.allowed_models,
+						record.allowed_ips,
+						record.created_at,
+					),
+			),
+		);
+
+		return created;
 	}
 
 	/** Lookup a key by SHA-256 hash of the plaintext token (for auth). */

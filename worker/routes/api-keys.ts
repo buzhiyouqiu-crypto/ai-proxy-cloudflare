@@ -26,6 +26,13 @@ const UpdateKeyBody = z.object({
 	allowedIps: z.array(z.string().min(1)).nullable().optional(),
 });
 
+const CloneKeyBody = z.object({
+	count: z.number().int().min(1).max(50).default(1),
+	nameRule: z.enum(["random", "prefix_sequence"]).default("random"),
+	prefix: z.string().trim().max(64).optional(),
+	startNumber: z.number().int().min(0).max(1_000_000).default(1),
+});
+
 function formatKey(k: DbApiKey) {
 	return {
 		id: k.id,
@@ -75,6 +82,46 @@ apiKeysRouter.get("/", async (c) => {
 	const dao = new ApiKeysDao(c.env.DB, c.env.ENCRYPTION_KEY);
 	const keys = await dao.listKeys(c.get("owner_id"));
 	return c.json({ data: keys.map(formatKey) });
+});
+
+apiKeysRouter.post("/:id/clone", async (c) => {
+	const body = parse(
+		CloneKeyBody,
+		await c.req.json().catch(() => {
+			throw new BadRequestError("Invalid JSON body", "invalid_json");
+		}),
+	);
+	if (body.nameRule === "prefix_sequence" && !body.prefix) {
+		throw new BadRequestError(
+			"A prefix is required for prefix-and-sequence names",
+			"prefix_required",
+		);
+	}
+
+	const dao = new ApiKeysDao(c.env.DB, c.env.ENCRYPTION_KEY);
+	const created = await dao.cloneKeys(c.get("owner_id"), c.req.param("id"), {
+		count: body.count,
+		name_rule: body.nameRule,
+		prefix: body.prefix,
+		start_number: body.startNumber,
+	});
+	if (!created) {
+		throw new ApiError(
+			"API Key not found",
+			404,
+			"not_found",
+			"api_key_not_found",
+		);
+	}
+
+	return c.json({
+		data: {
+			keys: created.map(({ record, plainKey }) => ({
+				...formatKey(record),
+				plainKey,
+			})),
+		},
+	});
 });
 
 apiKeysRouter.get("/:id/reveal", async (c) => {
