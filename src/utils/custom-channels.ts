@@ -9,8 +9,7 @@ export const CUSTOM_PROVIDER_ID = "custom";
 export const CUSTOM_CHANNEL_PREFIX = "custom:";
 export const PUBLIC_CUSTOM_CHANNEL_PREFIX = "custom:public-";
 
-const CUSTOM_CHANNEL_LOGO =
-	"https://api.iconify.design/mdi:server-network.svg";
+const CUSTOM_CHANNEL_LOGO = "https://api.iconify.design/mdi:server-network.svg";
 
 export function customChannelProviderId(channelId: string): string {
 	return `${CUSTOM_CHANNEL_PREFIX}${channelId}`;
@@ -53,7 +52,9 @@ export function expandCustomChannelProviders(
 	const visibleChannels = enabledChannels(channels);
 	if (!isAdmin || !visibleChannels) return providers;
 
-	const generic = providers.find((provider) => provider.id === CUSTOM_PROVIDER_ID);
+	const generic = providers.find(
+		(provider) => provider.id === CUSTOM_PROVIDER_ID,
+	);
 	const publicProviderIds = new Set(
 		visibleChannels.map((channel) => channelPublicProviderId(channel)),
 	);
@@ -95,7 +96,10 @@ export function expandCustomChannelModels(
 		(entry) => entry.provider_id === CUSTOM_PROVIDER_ID,
 	);
 	const channelByPublicProviderId = new Map(
-		visibleChannels.map((channel) => [channelPublicProviderId(channel), channel]),
+		visibleChannels.map((channel) => [
+			channelPublicProviderId(channel),
+			channel,
+		]),
 	);
 	const expanded: ModelEntry[] = [];
 
@@ -111,21 +115,25 @@ export function expandCustomChannelModels(
 		);
 		const inputPrice = model?.inputPrice ?? entry.input_price;
 		const outputPrice = model?.outputPrice ?? entry.output_price;
+		const billingMode = model?.billingMode ?? entry.billing_mode ?? "usage";
+		const requestPrice = model?.requestPrice ?? entry.request_price ?? null;
 		const multiplier = channel.priceMultiplier ?? 1;
 		expanded.push({
 			...entry,
 			provider_id: customChannelProviderId(channel.id),
-			name:
-				model?.catalogName ||
-				model?.name ||
-				entry.name ||
-				entry.id,
+			name: model?.catalogName || model?.name || entry.name || entry.id,
 			input_price: inputPrice,
 			output_price: outputPrice,
 			platform_input_price:
 				multiplier < 1 ? inputPrice * multiplier : undefined,
 			platform_output_price:
 				multiplier < 1 ? outputPrice * multiplier : undefined,
+			billing_mode: billingMode,
+			request_price: requestPrice,
+			platform_request_price:
+				billingMode === "request" && requestPrice != null && multiplier < 1
+					? requestPrice * multiplier
+					: undefined,
 			context_length: model?.contextLength ?? entry.context_length,
 			type: model?.modelType ?? entry.type,
 		});
@@ -138,6 +146,8 @@ export function expandCustomChannelModels(
 			if (!base) continue;
 			const inputPrice = model.inputPrice ?? base.input_price;
 			const outputPrice = model.outputPrice ?? base.output_price;
+			const billingMode = model.billingMode ?? base.billing_mode ?? "usage";
+			const requestPrice = model.requestPrice ?? base.request_price ?? null;
 			const multiplier = channel.priceMultiplier ?? 1;
 
 			expanded.push({
@@ -150,6 +160,12 @@ export function expandCustomChannelModels(
 					multiplier < 1 ? inputPrice * multiplier : undefined,
 				platform_output_price:
 					multiplier < 1 ? outputPrice * multiplier : undefined,
+				billing_mode: billingMode,
+				request_price: requestPrice,
+				platform_request_price:
+					billingMode === "request" && requestPrice != null && multiplier < 1
+						? requestPrice * multiplier
+						: undefined,
 				context_length: model.contextLength ?? base.context_length,
 				type: model.modelType ?? base.type,
 			});

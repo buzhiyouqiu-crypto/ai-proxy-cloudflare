@@ -37,8 +37,8 @@ export function detectCodeVariant(
 
 /* ── Code templates ─────────────────────────────────── */
 
-const API = "https://keyaos.com/v1";
-const TAB_KEY = "keyaos-code-tab";
+const API = "https://keyloom.cc.cd/v1";
+const TAB_KEY = "keyloom-code-tab";
 
 function getInitialTab(): number {
 	try {
@@ -129,7 +129,7 @@ console.log(response.choices[0].message.content);`,
 			label: "curl",
 			code: `curl ${API}/chat/completions \\
   -H "Content-Type: application/json" \\
-  -H "Authorization: Bearer $KEYAOS_API_KEY" \\
+  -H "Authorization: Bearer $KEYLOOM_API_KEY" \\
   -d '{
     "model": "${m}",
     "messages": [
@@ -227,7 +227,7 @@ console.log(response.choices[0].message.content);`,
 			label: "curl",
 			code: `curl ${API}/chat/completions \\
   -H "Content-Type: application/json" \\
-  -H "Authorization: Bearer $KEYAOS_API_KEY" \\
+  -H "Authorization: Bearer $KEYLOOM_API_KEY" \\
   -d '{
     "model": "${m}",
     "messages": [
@@ -333,7 +333,7 @@ console.log(response.choices[0].message.content);`,
 			label: "curl",
 			code: `curl ${API}/chat/completions \\
   -H "Content-Type: application/json" \\
-  -H "Authorization: Bearer $KEYAOS_API_KEY" \\
+  -H "Authorization: Bearer $KEYLOOM_API_KEY" \\
   -d '{
     "model": "${m}",
     "messages": [
@@ -427,7 +427,7 @@ console.log(embedding.data[0].embedding);`,
 			code: `# "input" also supports batch processing: ["text1", "text2", "text3"]
 curl ${API}/embeddings \\
   -H "Content-Type: application/json" \\
-  -H "Authorization: Bearer $KEYAOS_API_KEY" \\
+  -H "Authorization: Bearer $KEYLOOM_API_KEY" \\
   -d '{
     "model": "${m}",
     "input": "Your text string goes here",
@@ -456,13 +456,13 @@ function getSnippets(modelId: string, variant: CodeVariant): CodeTab[] {
 
 const INTRO: Record<CodeVariant, string> = {
 	standard:
-		"Keyaos provides an OpenAI-compatible API. Use any standard SDK — just point it to our base URL and start building.",
+		"Keyloom provides an OpenAI-compatible API. Use any standard SDK — just point it to our base URL and start building.",
 	reasoning:
 		"This model supports chain-of-thought reasoning. Enable the reasoning parameter to access the model's step-by-step thinking process alongside the final answer.",
 	image:
 		'This model supports image generation. Set modalities to ["image", "text"] to receive generated images as base64 data URLs in the response.',
 	embedding:
-		"Keyaos provides an OpenAI-compatible embeddings API. Pass a single string or an array of strings to get vector representations. Supports batch processing for multiple inputs in one request.",
+		"Keyloom provides an OpenAI-compatible embeddings API. Pass a single string or an array of strings to get vector representations. Supports batch processing for multiple inputs in one request.",
 };
 
 const LEARN_MORE: Record<CodeVariant, { href: string; label: string } | null> =
@@ -488,7 +488,7 @@ function applyApiKey(code: string, apiKey: string | null): string {
 	if (!apiKey) return code;
 	return code
 		.replace(/YOUR_API_KEY/g, apiKey)
-		.replace(/\$KEYAOS_API_KEY/g, apiKey);
+		.replace(/\$KEYLOOM_API_KEY/g, apiKey);
 }
 
 /* ── Component ──────────────────────────────────────── */

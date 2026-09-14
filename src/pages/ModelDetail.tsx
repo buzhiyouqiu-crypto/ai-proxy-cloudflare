@@ -29,7 +29,7 @@ import {
 	expandCustomChannelModels,
 	expandCustomChannelProviders,
 } from "../utils/custom-channels";
-import { formatContext, formatRelativeTime } from "../utils/format";
+import { formatContext, formatRelativeTime, formatUSD } from "../utils/format";
 import { aggregateModels } from "../utils/models";
 
 export function ModelDetail() {
@@ -207,6 +207,9 @@ export function ModelDetail() {
 							<th className="py-2.5 pl-4 pr-2 sm:pl-5">
 								{t("models.provider", "Provider")}
 							</th>
+							<th className="px-2 py-2.5 text-right">
+								{t("models.billing", "Billing")}
+							</th>
 							<th className="px-2 py-2.5">ID</th>
 							<th className="px-2 py-2.5 text-right">
 								{t("models.input_price", "Input /1M")}
@@ -255,6 +258,29 @@ export function ModelDetail() {
 											)}
 										</span>
 									</td>
+									<td className="px-2 py-2.5 text-right whitespace-nowrap">
+										<div className="inline-flex flex-col items-end gap-1">
+											<Badge
+												variant={
+													p.billingMode === "request" ? "accent" : "info"
+												}
+											>
+												{p.billingMode === "request"
+													? t("models.billing_request", "按次")
+													: t("models.billing_usage", "按量")}
+											</Badge>
+											{p.billingMode === "request" &&
+												p.requestPrice != null && (
+													<span className="text-xs font-mono text-gray-600 dark:text-gray-400">
+														<RequestPrice
+															original={p.requestPrice}
+															platform={p.platformRequestPrice}
+														/>
+														{t("models.per_request", "/次")}
+													</span>
+												)}
+										</div>
+									</td>
 									<td className="px-2 py-2.5 whitespace-nowrap">
 										<div className="flex items-center gap-1">
 											<code className="text-xs font-mono text-gray-500 dark:text-gray-400">
@@ -264,16 +290,24 @@ export function ModelDetail() {
 										</div>
 									</td>
 									<td className="px-2 py-2.5 text-sm font-mono text-right text-gray-600 dark:text-gray-400">
-										<DualPrice
-											original={p.inputPrice}
-											platform={p.platformInputPrice}
-										/>
+										{p.billingMode === "request" ? (
+											"—"
+										) : (
+											<DualPrice
+												original={p.inputPrice}
+												platform={p.platformInputPrice}
+											/>
+										)}
 									</td>
 									<td className="px-2 py-2.5 text-sm font-mono text-right text-gray-600 dark:text-gray-400">
-										<DualPrice
-											original={p.outputPrice}
-											platform={p.platformOutputPrice}
-										/>
+										{p.billingMode === "request" ? (
+											"—"
+										) : (
+											<DualPrice
+												original={p.outputPrice}
+												platform={p.platformOutputPrice}
+											/>
+										)}
 									</td>
 									<td className="py-2.5 pl-2 pr-4 text-sm font-mono text-right text-gray-600 dark:text-gray-400 sm:pr-5">
 										{formatContext(p.contextLength)}
@@ -289,6 +323,26 @@ export function ModelDetail() {
 			<CodeSamples modelId={group.id} variant={codeVariant} />
 		</div>
 	);
+}
+
+function RequestPrice({
+	original,
+	platform,
+}: {
+	original: number;
+	platform?: number;
+}) {
+	if (platform != null && platform < original) {
+		return (
+			<>
+				{formatUSD(platform)}{" "}
+				<span className="text-[0.85em] line-through opacity-35">
+					{formatUSD(original)}
+				</span>
+			</>
+		);
+	}
+	return <>{formatUSD(original)}</>;
 }
 
 // ─── Modality pills (detail page only) ───────────────────

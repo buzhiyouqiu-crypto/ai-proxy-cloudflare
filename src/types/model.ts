@@ -11,6 +11,9 @@ export interface ModelEntry {
 	output_price?: number;
 	platform_input_price?: number;
 	platform_output_price?: number;
+	billing_mode?: "usage" | "request";
+	request_price?: number | null;
+	platform_request_price?: number;
 	context_length?: number;
 	created?: number | null;
 	input_modalities?: Modality[];

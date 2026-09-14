@@ -26,6 +26,8 @@ export interface AdminChannelModelSummary {
 	name?: string | null;
 	inputPrice?: number;
 	outputPrice?: number;
+	billingMode?: "usage" | "request";
+	requestPrice?: number | null;
 	contextLength?: number | null;
 	modelType?: "chat" | "embedding";
 }

@@ -20,7 +20,21 @@ export interface ProviderRow {
 	outputPrice: number;
 	platformInputPrice?: number;
 	platformOutputPrice?: number;
+	billingMode: "usage" | "request";
+	requestPrice?: number | null;
+	platformRequestPrice?: number;
 	contextLength: number;
+}
+
+function effectivePrice(provider: ProviderRow): number {
+	if (provider.billingMode === "request") {
+		return (
+			provider.platformRequestPrice ??
+			provider.requestPrice ??
+			Number.POSITIVE_INFINITY
+		);
+	}
+	return provider.platformInputPrice ?? provider.inputPrice;
 }
 
 export function aggregateModels(entries: ModelEntry[]): ModelGroup[] {
@@ -66,6 +80,12 @@ export function aggregateModels(entries: ModelEntry[]): ModelGroup[] {
 			outputPrice: e.output_price ?? 0,
 			platformInputPrice: e.platform_input_price,
 			platformOutputPrice: e.platform_output_price,
+			billingMode:
+				e.billing_mode === "request"
+					? ("request" as const)
+					: ("usage" as const),
+			requestPrice: e.request_price,
+			platformRequestPrice: e.platform_request_price,
 			contextLength: e.context_length ?? 0,
 		};
 		const existing = group.providers.find(
@@ -73,18 +93,14 @@ export function aggregateModels(entries: ModelEntry[]): ModelGroup[] {
 		);
 		if (!existing) {
 			group.providers.push(provider);
-		} else if (
-			provider.inputPrice < existing.inputPrice ||
-			(provider.inputPrice === existing.inputPrice &&
-				provider.outputPrice < existing.outputPrice)
-		) {
+		} else if (effectivePrice(provider) < effectivePrice(existing)) {
 			const index = group.providers.indexOf(existing);
 			group.providers[index] = provider;
 		}
 	}
 
 	for (const g of groups.values()) {
-		g.providers.sort((a, b) => a.inputPrice - b.inputPrice);
+		g.providers.sort((a, b) => effectivePrice(a) - effectivePrice(b));
 	}
 
 	return [...groups.values()];
