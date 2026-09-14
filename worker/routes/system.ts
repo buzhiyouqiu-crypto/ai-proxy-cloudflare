@@ -19,7 +19,8 @@ const systemRouter = new Hono<AppEnv>();
 systemRouter.get("/me", (c) => {
 	const ownerId = c.get("owner_id");
 	const isAdmin =
-		!!c.env.PLATFORM_OWNER_ID && ownerId === c.env.PLATFORM_OWNER_ID;
+		!c.env.CLERK_SECRET_KEY ||
+		(!!c.env.PLATFORM_OWNER_ID && ownerId === c.env.PLATFORM_OWNER_ID);
 	return c.json({ ownerId, isAdmin });
 });
 

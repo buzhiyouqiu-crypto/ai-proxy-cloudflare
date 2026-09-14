@@ -18,9 +18,7 @@ interface Props {
 
 export function ModelMultiSelect({ value, onChange, placeholder }: Props) {
 	const { t } = useTranslation();
-	const { data: models } = useFetch<ModelEntry[]>("/api/models", {
-		requireAuth: false,
-	});
+	const { data: models } = useFetch<ModelEntry[]>("/api/models");
 	const groups = useMemo(
 		() => (models ? aggregateModels(models) : []),
 		[models],

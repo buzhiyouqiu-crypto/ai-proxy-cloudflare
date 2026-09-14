@@ -38,12 +38,8 @@ export function ModelDetail() {
 	const { isAdmin } = useAuth();
 	const modelId = `${org}/${model}`;
 
-	const { data: rawModels, loading } = useFetch<ModelEntry[]>("/api/models", {
-		requireAuth: false,
-	});
-	const { data: providersData } = useFetch<ProviderMeta[]>("/api/providers", {
-		requireAuth: false,
-	});
+	const { data: rawModels, loading } = useFetch<ModelEntry[]>("/api/models");
+	const { data: providersData } = useFetch<ProviderMeta[]>("/api/providers");
 	const { data: adminChannels } = useFetch<AdminChannelSummary[]>(
 		"/api/admin/channels",
 		{ skip: !isAdmin, staleTime: 0 },

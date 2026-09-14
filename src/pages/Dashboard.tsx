@@ -68,14 +68,12 @@ export function Dashboard() {
 		data: rawModels,
 		loading: modelsLoading,
 		refetch: refetchModels,
-	} = useFetch<ModelEntry[]>("/api/models", { requireAuth: false });
+	} = useFetch<ModelEntry[]>("/api/models");
 	const {
 		data: providersData,
 		loading: providersLoading,
 		refetch: refetchProviders,
-	} = useFetch<ProviderMeta[]>("/api/providers", {
-		requireAuth: false,
-	});
+	} = useFetch<ProviderMeta[]>("/api/providers");
 	const { data: adminChannels } = useFetch<AdminChannelSummary[]>(
 		"/api/admin/channels",
 		{ skip: !isAdmin, staleTime: 0 },
@@ -95,9 +93,7 @@ export function Dashboard() {
 		data: inputSparks,
 		loading: sparksLoading,
 		refetch: refetchSparks,
-	} = useFetch<Record<string, SparklineData>>("/api/sparklines/model:input", {
-		requireAuth: false,
-	});
+	} = useFetch<Record<string, SparklineData>>("/api/sparklines/model:input");
 
 	const isRefreshing =
 		statsLoading ||

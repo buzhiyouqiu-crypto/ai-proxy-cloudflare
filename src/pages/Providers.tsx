@@ -36,13 +36,13 @@ export function Providers() {
 		data: models,
 		loading: modelsLoading,
 		refetch: refetchModels,
-	} = useFetch<ModelEntry[]>("/api/models", { requireAuth: false });
+	} = useFetch<ModelEntry[]>("/api/models");
 	const { data: providersData, loading: providersLoading } = useFetch<
 		ProviderMeta[]
-	>("/api/providers", { requireAuth: false });
+	>("/api/providers");
 	const { data: providerSparks, refetch: refetchSparks } = useFetch<
 		Record<string, SparklineData>
-	>("/api/sparklines/provider?sample=900000", { requireAuth: false });
+	>("/api/sparklines/provider?sample=900000");
 	const {
 		data: adminChannels,
 		loading: adminChannelsLoading,

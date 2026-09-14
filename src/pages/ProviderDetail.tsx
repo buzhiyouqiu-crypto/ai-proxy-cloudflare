@@ -30,11 +30,10 @@ export function ProviderDetail() {
 
 	const { data: models, loading: modelsLoading } = useFetch<ModelEntry[]>(
 		"/api/models",
-		{ requireAuth: false },
 	);
 	const { data: providersData, loading: providersLoading } = useFetch<
 		ProviderMeta[]
-	>("/api/providers", { requireAuth: false });
+	>("/api/providers");
 	const {
 		data: adminChannels,
 		loading: adminChannelsLoading,

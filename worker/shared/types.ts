@@ -8,6 +8,8 @@ export type Env = {
 	CNY_USD_RATE?: string;
 	/** Allowed browser origin for management API CORS. */
 	CORS_ORIGIN?: string;
+	/** When true, only the platform owner/admin can use management pages and APIs. */
+	ADMIN_ONLY_MODE?: string;
 	STRIPE_SECRET_KEY?: string;
 	STRIPE_WEBHOOK_SECRET?: string;
 	ASSETS?: Fetcher;

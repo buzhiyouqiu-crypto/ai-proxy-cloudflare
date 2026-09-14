@@ -66,7 +66,6 @@ export function Byok() {
 
 	const { data: providersData } = useFetch<ProviderMeta[]>(
 		"/api/providers?all=1",
-		{ requireAuth: false },
 	);
 	const providers = providersData || [];
 

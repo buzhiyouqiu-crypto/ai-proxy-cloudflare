@@ -1,4 +1,4 @@
-import { Suspense, useEffect } from "react";
+import { Suspense, type ReactNode, useEffect } from "react";
 import {
 	createBrowserRouter,
 	Navigate,
@@ -7,7 +7,15 @@ import {
 	useLocation,
 	useNavigate,
 } from "react-router-dom";
-import { AuthGuard, isPlatform, SignupContent, useAuth } from "./auth";
+import {
+	AdminOnlyNotice,
+	AuthGuard,
+	AuthSkeleton,
+	isPlatform,
+	SignupContent,
+	useAdminOnlyMode,
+	useAuth,
+} from "./auth";
 import { PageLoader } from "./components/PageLoader";
 import { RouteError } from "./components/RouteError";
 import { SidebarLayout } from "./components/SidebarLayout";
@@ -130,13 +138,35 @@ const ApiReference = lazyWithRetry(() =>
 // ─── Shared layouts ──────────────────────────────────────
 
 function AppLayout() {
-	return (
+	const { pathname } = useLocation();
+	const isAuthRoute =
+		pathname === "/login" ||
+		pathname.startsWith("/login/") ||
+		pathname === "/signup" ||
+		pathname.startsWith("/signup/");
+
+	if (isAuthRoute) return <Outlet />;
+
+	return <AdminPageGuard>
 		<>
 			<TopNav />
 			<ScrollRestoration />
 			<Outlet />
 		</>
-	);
+	</AdminPageGuard>;
+}
+
+function AdminPageGuard({ children }: { children: ReactNode }) {
+	const { isLoaded, isSignedIn, isAdmin } = useAuth();
+	const adminOnly = useAdminOnlyMode();
+
+	if (adminOnly === null || !isLoaded || (isSignedIn && isAdmin === null)) {
+		return <AuthSkeleton />;
+	}
+	if (!adminOnly) return <>{children}</>;
+	if (!isSignedIn) return <Navigate to="/login" replace />;
+	if (!isAdmin) return <AdminOnlyNotice />;
+	return <>{children}</>;
 }
 
 function ContentShell() {
@@ -154,28 +184,47 @@ function ContentShell() {
 // ─── Login route ─────────────────────────────────────────
 
 function LoginRoute() {
-	const { isLoaded, isSignedIn } = useAuth();
+	const { isLoaded, isSignedIn, isAdmin } = useAuth();
+	const adminOnly = useAdminOnlyMode();
 	const { pathname } = useLocation();
 	const navigate = useNavigate();
 
 	useEffect(() => {
-		if (isLoaded && isSignedIn && pathname === "/login") {
+		if (
+			isLoaded &&
+			isSignedIn &&
+			(adminOnly === false || isAdmin === true) &&
+			pathname === "/login"
+		) {
 			navigate("/dashboard", { replace: true });
 		}
-	}, [isLoaded, isSignedIn, pathname, navigate]);
+	}, [adminOnly, isAdmin, isLoaded, isSignedIn, pathname, navigate]);
+
+	if (adminOnly === true && isLoaded && isSignedIn && isAdmin === false) {
+		return <AdminOnlyNotice />;
+	}
 
 	return <Login />;
 }
 
 function SignupRoute() {
-	const { isLoaded, isSignedIn } = useAuth();
+	const { isLoaded, isSignedIn, isAdmin } = useAuth();
+	const adminOnly = useAdminOnlyMode();
 	const navigate = useNavigate();
 
 	useEffect(() => {
-		if (isLoaded && isSignedIn) {
+		if (
+			isLoaded &&
+			isSignedIn &&
+			(adminOnly === false || isAdmin === true)
+		) {
 			navigate("/dashboard", { replace: true });
 		}
-	}, [isLoaded, isSignedIn, navigate]);
+	}, [adminOnly, isAdmin, isLoaded, isSignedIn, navigate]);
+
+	if (adminOnly === true && isLoaded && isSignedIn && isAdmin === false) {
+		return <AdminOnlyNotice />;
+	}
 
 	return (
 		<div className="flex min-h-dvh flex-col items-center justify-center px-6 pt-14 pb-12">

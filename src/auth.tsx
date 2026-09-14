@@ -41,6 +41,43 @@ interface AuthContextType {
 
 const AuthContext = createContext<AuthContextType | null>(null);
 
+const AdminOnlyModeContext = createContext<boolean | null>(null);
+
+export function useAdminOnlyMode(): boolean | null {
+	return useContext(AdminOnlyModeContext);
+}
+
+function AdminOnlyModeProvider({ children }: { children: ReactNode }) {
+	const [adminOnly, setAdminOnly] = useState<boolean | null>(null);
+
+	useEffect(() => {
+		let active = true;
+		fetch("/api/access-policy")
+			.then(async (response) => {
+				if (!response.ok) throw new Error("Failed to load access policy");
+				const data = (await response.json()) as { adminOnly?: boolean };
+				return data.adminOnly === true;
+			})
+			.then((value) => {
+				if (active) setAdminOnly(value);
+			})
+			.catch(() => {
+				// Fail closed if the policy cannot be loaded.
+				if (active) setAdminOnly(true);
+			});
+
+		return () => {
+			active = false;
+		};
+	}, []);
+
+	return (
+		<AdminOnlyModeContext.Provider value={adminOnly}>
+			{children}
+		</AdminOnlyModeContext.Provider>
+	);
+}
+
 export function useAuth(): AuthContextType {
 	const ctx = useContext(AuthContext);
 	if (!ctx) throw new Error("useAuth must be used within <AuthProvider>");
@@ -53,23 +90,71 @@ function CoreAuthProvider({ children }: { children: ReactNode }) {
 	const [token, setToken] = useState<string | null>(() =>
 		localStorage.getItem("admin_token"),
 	);
+	const [isLoaded, setIsLoaded] = useState(() => !token);
+	const [isAdmin, setIsAdmin] = useState<boolean | null>(() =>
+		token ? null : false,
+	);
+
+	useEffect(() => {
+		if (!token) {
+			setIsAdmin(false);
+			setIsLoaded(true);
+			return;
+		}
+
+		let active = true;
+		setIsLoaded(false);
+		setIsAdmin(null);
+		fetch("/api/me", {
+			headers: { Authorization: `Bearer ${token}` },
+		})
+			.then(async (response) => {
+				if (!response.ok) return false;
+				const data = (await response.json()) as { isAdmin?: boolean };
+				return data.isAdmin === true;
+			})
+			.then((valid) => {
+				if (!active) return;
+				if (!valid) {
+					localStorage.removeItem("admin_token");
+					setToken(null);
+				}
+				setIsAdmin(valid);
+			})
+			.catch(() => {
+				if (!active) return;
+				localStorage.removeItem("admin_token");
+				setToken(null);
+				setIsAdmin(false);
+			})
+			.finally(() => {
+				if (active) setIsLoaded(true);
+			});
+
+		return () => {
+			active = false;
+		};
+	}, [token]);
 
 	const value = useMemo<AuthContextType>(
 		() => ({
 			getToken: async () => token,
-			isLoaded: true,
-			isSignedIn: !!token,
-			isAdmin: false as const,
+			isLoaded,
+			isSignedIn: !!token && isAdmin === true,
+			isAdmin,
 			signOut: () => {
 				localStorage.removeItem("admin_token");
 				setToken(null);
+				setIsAdmin(false);
 			},
 			signIn: (t: string) => {
 				localStorage.setItem("admin_token", t);
 				setToken(t);
+				setIsLoaded(false);
+				setIsAdmin(null);
 			},
 		}),
-		[token],
+		[isAdmin, isLoaded, token],
 	);
 
 	return <AuthContext.Provider value={value}>{children}</AuthContext.Provider>;
@@ -156,39 +241,45 @@ export function AuthProvider({ children }: { children: ReactNode }) {
 
 	if (isPlatform) {
 		return (
-			<ClerkProvider
-				publishableKey={import.meta.env.VITE_CLERK_PUBLISHABLE_KEY}
-				signInUrl="/login"
-				signUpUrl="/signup"
-				afterSignOutUrl="/login"
-				signInFallbackRedirectUrl="/dashboard"
-				signUpFallbackRedirectUrl="/dashboard"
-				localization={clerkLocales[i18n.language] ?? enUS}
-				appearance={{
-					baseTheme: isDark ? dark : undefined,
-					options: { socialButtonsVariant: "blockButton" },
-					elements: {
-						socialButtons: {
-							display: "flex",
-							flexDirection: "column",
-							gap: "12px",
+			<AdminOnlyModeProvider>
+				<ClerkProvider
+					publishableKey={import.meta.env.VITE_CLERK_PUBLISHABLE_KEY}
+					signInUrl="/login"
+					signUpUrl="/signup"
+					afterSignOutUrl="/login"
+					signInFallbackRedirectUrl="/dashboard"
+					signUpFallbackRedirectUrl="/dashboard"
+					localization={clerkLocales[i18n.language] ?? enUS}
+					appearance={{
+						baseTheme: isDark ? dark : undefined,
+						options: { socialButtonsVariant: "blockButton" },
+						elements: {
+							socialButtons: {
+								display: "flex",
+								flexDirection: "column",
+								gap: "12px",
+							},
+							socialButtonsBlockButton: {
+								width: "100%",
+							},
 						},
-						socialButtonsBlockButton: {
-							width: "100%",
-						},
-					},
-				}}
-			>
-				<ClerkAuthBridge>{children}</ClerkAuthBridge>
-			</ClerkProvider>
+					}}
+				>
+					<ClerkAuthBridge>{children}</ClerkAuthBridge>
+				</ClerkProvider>
+			</AdminOnlyModeProvider>
 		);
 	}
-	return <CoreAuthProvider>{children}</CoreAuthProvider>;
+	return (
+		<AdminOnlyModeProvider>
+			<CoreAuthProvider>{children}</CoreAuthProvider>
+		</AdminOnlyModeProvider>
+	);
 }
 
 // ─── AuthGuard ──────────────────────────────────────────
 
-function AuthSkeleton() {
+export function AuthSkeleton() {
 	return (
 		<div>
 			{/* Sidebar skeleton — matches BaseSidebarLayout (w-64, top-14) */}
@@ -224,6 +315,31 @@ export function AuthGuard({
 	const { isLoaded, isSignedIn } = useAuth();
 	if (!isLoaded) return <AuthSkeleton />;
 	return <>{isSignedIn ? children : fallback}</>;
+}
+
+/**
+ * Platform users can still use a provisioned downstream API key, but only
+ * the configured owner is allowed to open the management UI.
+ */
+export function AdminOnlyNotice() {
+	const { signOut } = useAuth();
+
+	return (
+		<div className="flex min-h-dvh items-center justify-center px-6 py-16">
+			<div className="w-full max-w-md rounded-2xl border border-gray-200 bg-white p-8 text-center shadow-sm dark:border-white/10 dark:bg-white/5">
+				<h1 className="text-xl font-semibold text-gray-900 dark:text-white">
+					API-only access
+				</h1>
+				<p className="mt-3 text-sm leading-6 text-gray-500 dark:text-gray-400">
+					This account cannot access the management pages. Use a valid Keyloom
+					API key to call the API, or sign in with the administrator account.
+				</p>
+				<Button type="button" variant="secondary" className="mt-6" onClick={signOut}>
+					Sign out
+				</Button>
+			</div>
+		</div>
+	);
 }
 
 // ─── LoginPage ──────────────────────────────────────────

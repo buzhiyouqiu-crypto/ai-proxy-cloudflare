@@ -46,9 +46,7 @@ function ModelSearch() {
 	const inputRef = useRef<HTMLInputElement>(null);
 	const [activeIdx, setActiveIdx] = useState(-1);
 
-	const { data: raw } = useFetch<ModelEntry[]>("/api/models", {
-		requireAuth: false,
-	});
+	const { data: raw } = useFetch<ModelEntry[]>("/api/models");
 	const groups = useMemo(() => aggregateModels(raw ?? []), [raw]);
 
 	const results = useMemo(() => {

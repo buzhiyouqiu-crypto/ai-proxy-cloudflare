@@ -45,6 +45,20 @@ const CHAT_BODY_LIMIT = 10 * 1024 * 1024;
 
 const app = new Hono<AppEnv>();
 
+function isAdminOnlyMode(c: Context<AppEnv>): boolean {
+	return ["1", "true", "yes", "on"].includes(
+		(c.env.ADMIN_ONLY_MODE || "").trim().toLowerCase(),
+	);
+}
+
+function isManagementAdmin(c: Context<AppEnv>): boolean {
+	if (!isAdminOnlyMode(c)) return true;
+	return (
+		!c.env.CLERK_SECRET_KEY ||
+		(!!c.env.PLATFORM_OWNER_ID && c.get("owner_id") === c.env.PLATFORM_OWNER_ID)
+	);
+}
+
 app.onError((err, c) => {
 	if (err instanceof ApiError) {
 		const level = err.statusCode >= 500 ? "error" : "warn";
@@ -177,10 +191,20 @@ app.use("*", async (c, next) => {
 
 app.get("/health", (c) => c.json({ status: "ok" }));
 
+// This policy is intentionally public so the SPA can decide whether to show
+// the normal public experience or the administrator-only experience before a
+// user has authenticated.
+app.get("/api/access-policy", (c) => {
+	c.header("Cache-Control", "no-store");
+	return c.json({ adminOnly: isAdminOnlyMode(c) });
+});
+
 // ─── Auth: Management API (/api/*) ─────────────────────
 app.use("/api/*", async (c, next) => {
 	if (c.req.path.startsWith("/api/webhooks/")) return next();
+	if (c.req.path === "/api/access-policy") return next();
 	if (
+		!isAdminOnlyMode(c) &&
 		c.req.method === "GET" &&
 		((c.req.path === "/api/providers" && c.req.query("all") !== "1") ||
 			c.req.path === "/api/models" ||
@@ -195,6 +219,14 @@ app.use("/api/*", async (c, next) => {
 		const auth = getAuth(c);
 		if (auth?.userId) {
 			c.set("owner_id", auth.userId);
+			if (c.req.path !== "/api/me" && !isManagementAdmin(c)) {
+				throw new ApiError(
+					"Administrator access is required",
+					403,
+					"authorization_error",
+					"admin_access_required",
+				);
+			}
 			return next();
 		}
 		throw new AuthenticationError("Invalid or missing Clerk session");
@@ -248,7 +280,9 @@ app.use("/v1/*", async (c, next) => {
 		return next();
 	}
 
-	if (c.env.CLERK_SECRET_KEY) {
+	// Preserve the previous platform behavior while the administrator-only
+	// switch is disabled: a valid Clerk session can call the downstream API.
+	if (!isAdminOnlyMode(c) && c.env.CLERK_SECRET_KEY) {
 		try {
 			await clerkMiddleware()(c, async () => {});
 			const auth = getAuth(c);
@@ -257,12 +291,12 @@ app.use("/v1/*", async (c, next) => {
 				return next();
 			}
 		} catch {
-			// Not a valid Clerk JWT — fall through
+			// Not a valid Clerk JWT — fall through to the admin token check.
 		}
 	}
 
-	if (token === c.env.ADMIN_TOKEN) {
-		c.set("owner_id", CORE_OWNER);
+	if (c.env.ADMIN_TOKEN && token === c.env.ADMIN_TOKEN) {
+		c.set("owner_id", c.env.PLATFORM_OWNER_ID || CORE_OWNER);
 		return next();
 	}
 

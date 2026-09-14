@@ -53,17 +53,15 @@ export function Models() {
 		loading,
 		error,
 		refetch: refetchModels,
-	} = useFetch<ModelEntry[]>("/api/models", { requireAuth: false });
-	const { data: providersData } = useFetch<ProviderMeta[]>("/api/providers", {
-		requireAuth: false,
-	});
+	} = useFetch<ModelEntry[]>("/api/models");
+	const { data: providersData } = useFetch<ProviderMeta[]>("/api/providers");
 	const { data: adminChannels } = useFetch<AdminChannelSummary[]>(
 		"/api/admin/channels",
 		{ skip: !isAdmin, staleTime: 0 },
 	);
 	const { data: inputSparks, refetch: refetchSparks } = useFetch<
 		Record<string, SparklineData>
-	>("/api/sparklines/model:input", { requireAuth: false });
+	>("/api/sparklines/model:input");
 
 	const refetch = useCallback(() => {
 		refetchModels();

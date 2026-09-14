@@ -119,15 +119,10 @@ function PlatformShowcase() {
 	const { t, i18n } = useTranslation();
 	const navigate = useNavigate();
 
-	const { data: providers } = useFetch<ProviderMeta[]>("/api/providers", {
-		requireAuth: false,
-	});
-	const { data: models } = useFetch<ModelEntry[]>("/api/models", {
-		requireAuth: false,
-	});
+	const { data: providers } = useFetch<ProviderMeta[]>("/api/providers");
+	const { data: models } = useFetch<ModelEntry[]>("/api/models");
 	const { data: inputSparks } = useFetch<Record<string, SparklineData>>(
 		"/api/sparklines/model:input",
-		{ requireAuth: false },
 	);
 
 	const providerGroups = useMemo(
