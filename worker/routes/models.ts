@@ -4,8 +4,8 @@ import { CatalogDao } from "../core/db/catalog-dao";
 import { getVisibleProviders } from "../core/providers/registry";
 import { edgeCache } from "../shared/cache";
 import {
-	publicCustomChannelProviderId,
 	CUSTOM_PROVIDER_ID,
+	publicCustomChannelProviderId,
 } from "../shared/custom-channel-identity";
 import type { AppEnv } from "../shared/types";
 
@@ -89,7 +89,8 @@ publicModelsRouter.get("/", async (c) => {
 	]);
 
 	const visibleIds = new Set(getVisibleProviders().map((p) => p.info.id));
-	if ((customChannels.results ?? []).length > 0) visibleIds.add(CUSTOM_PROVIDER_ID);
+	if ((customChannels.results ?? []).length > 0)
+		visibleIds.add(CUSTOM_PROVIDER_ID);
 	const publicCustomProviders = new Map(
 		(customChannels.results ?? []).map((row) => [
 			row.id,
@@ -184,6 +185,9 @@ publicModelsRouter.get("/", async (c) => {
 			return {
 				id,
 				type: g.modelType,
+				billing_mode: m?.billingMode === "request" ? "request" : "usage",
+				request_price:
+					typeof m?.requestPrice === "number" ? m.requestPrice : null,
 				name: (m?.name as string) ?? g.name ?? id,
 				created: (m?.created as number) ?? 0,
 				description: cleanDescription(m?.description),
@@ -220,7 +224,8 @@ dashboardModelsRouter.get("/", edgeCache(3600), async (c) => {
 	]);
 
 	const visibleIds = new Set(getVisibleProviders().map((p) => p.info.id));
-	if ((customChannels.results ?? []).length > 0) visibleIds.add(CUSTOM_PROVIDER_ID);
+	if ((customChannels.results ?? []).length > 0)
+		visibleIds.add(CUSTOM_PROVIDER_ID);
 	const publicCustomProviders = new Map(
 		(customChannels.results ?? []).map((row) => [
 			row.id,
@@ -245,6 +250,9 @@ dashboardModelsRouter.get("/", edgeCache(3600), async (c) => {
 			return {
 				id: m.model_id,
 				type: m.model_type,
+				billing_mode: meta?.billingMode === "request" ? "request" : "usage",
+				request_price:
+					typeof meta?.requestPrice === "number" ? meta.requestPrice : null,
 				provider_id: providerId,
 				name: m.name,
 				description: cleanDescription(meta?.description),
@@ -254,6 +262,9 @@ dashboardModelsRouter.get("/", edgeCache(3600), async (c) => {
 					mul < 1 && {
 						platform_input_price: m.input_price * mul,
 						platform_output_price: m.output_price * mul,
+						...(typeof meta?.requestPrice === "number" && {
+							platform_request_price: meta.requestPrice * mul,
+						}),
 					}),
 				context_length: m.context_length,
 				created: m.created || null,

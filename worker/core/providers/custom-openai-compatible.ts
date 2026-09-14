@@ -15,6 +15,10 @@ export interface CustomChannelModel {
 	outputPrice: number;
 	/** Optional fallback price in USD per generated/edited image. */
 	imagePrice?: number | null;
+	/** How downstream usage is billed. Defaults to token/image usage. */
+	billingMode?: "usage" | "request";
+	/** Fixed USD price charged once for each API request. */
+	requestPrice?: number | null;
 	contextLength?: number | null;
 	modelType?: "chat" | "embedding";
 }
@@ -77,13 +81,18 @@ function replaceSecret(value: string, secret: string): string {
  * Arbitrary JS is not executed in Workers; only literal request fields and
  * response property expressions are accepted.
  */
-function parseExtractorRequest(code: string, secret: string): ExtractorRequest | null {
+function parseExtractorRequest(
+	code: string,
+	secret: string,
+): ExtractorRequest | null {
 	const url = code.match(/\burl\s*:\s*["'`]([^"'`]+)["'`]/)?.[1];
 	if (!url) return null;
 	const method = code.match(/\bmethod\s*:\s*["'`]([^"'`]+)["'`]/)?.[1] ?? "GET";
 	const headers: Record<string, string> = {};
-	const headerBlock = code.match(/\bheaders\s*:\s*\{([\s\S]*?)\}\s*[,}]/)?.[1] ?? "";
-	const pairPattern = /(?:["'`])?([A-Za-z0-9_-]+)(?:["'`])?\s*:\s*["'`]([^"'`]*)["'`]/g;
+	const headerBlock =
+		code.match(/\bheaders\s*:\s*\{([\s\S]*?)\}\s*[,}]/)?.[1] ?? "";
+	const pairPattern =
+		/(?:["'`])?([A-Za-z0-9_-]+)(?:["'`])?\s*:\s*["'`]([^"'`]*)["'`]/g;
 	for (const match of headerBlock.matchAll(pairPattern)) {
 		headers[match[1]] = replaceSecret(match[2], secret);
 	}
@@ -98,7 +107,11 @@ function parseExtractorRequest(code: string, secret: string): ExtractorRequest |
 			if (!value || /^Bearer\s*$/i.test(value.trim())) delete headers[key];
 		}
 	}
-	return { url: replaceSecret(url, secret), method: method.toUpperCase(), headers };
+	return {
+		url: replaceSecret(url, secret),
+		method: method.toUpperCase(),
+		headers,
+	};
 }
 
 function valueAtPath(response: unknown, reference: string): unknown {
@@ -127,7 +140,7 @@ function splitTopLevel(expression: string, separator: string): string[] {
 			if (char === quote && expression[i - 1] !== "\\") quote = "";
 			continue;
 		}
-		if (char === "\"" || char === "'" || char === "`") {
+		if (char === '"' || char === "'" || char === "`") {
 			quote = char;
 			continue;
 		}
@@ -172,7 +185,8 @@ function evaluateArithmetic(expression: string): number | null {
 	if (!tokens || tokens.join("") !== compact) return null;
 	const values: number[] = [];
 	const operators: string[] = [];
-	const precedence = (operator: string) => (operator === "+" || operator === "-" ? 1 : 2);
+	const precedence = (operator: string) =>
+		operator === "+" || operator === "-" ? 1 : 2;
 	const apply = () => {
 		const operator = operators.pop();
 		const right = values.pop();
@@ -230,7 +244,10 @@ function createExtractorResolver(code: string, response: unknown) {
 		variables.set(match[1], match[2].trim());
 	}
 
-	const resolve = (rawExpression: string, stack = new Set<string>()): unknown => {
+	const resolve = (
+		rawExpression: string,
+		stack = new Set<string>(),
+	): unknown => {
 		const expression = unwrapParentheses(rawExpression.trim());
 		if (!expression) return undefined;
 
@@ -247,14 +264,14 @@ function createExtractorResolver(code: string, response: unknown) {
 		if (ternary.length === 2) {
 			const branches = splitTopLevel(ternary[1], ":");
 			if (branches.length === 2) {
-				const comparison = ternary[0].match(
-					/^(.+?)\s*(===|==|!==|!=)\s*(.+)$/,
-				);
+				const comparison = ternary[0].match(/^(.+?)\s*(===|==|!==|!=)\s*(.+)$/);
 				let truthy = Boolean(resolve(ternary[0], stack));
 				if (comparison) {
 					const left = resolve(comparison[1], stack);
 					const right = resolve(comparison[3], stack);
-					truthy = comparison[2].includes("!") ? left !== right : left === right;
+					truthy = comparison[2].includes("!")
+						? left !== right
+						: left === right;
 				}
 				return resolve(branches[truthy ? 0 : 1], stack);
 			}
@@ -273,16 +290,18 @@ function createExtractorResolver(code: string, response: unknown) {
 		}
 
 		if (
-			(expression.startsWith("\"") && expression.endsWith("\"")) ||
+			(expression.startsWith('"') && expression.endsWith('"')) ||
 			(expression.startsWith("'") && expression.endsWith("'"))
 		) {
 			return expression.slice(1, -1);
 		}
 		if (expression.startsWith("`") && expression.endsWith("`")) {
-			return expression.slice(1, -1).replace(/\$\{([^}]+)\}/g, (_, part: string) => {
-				const value = resolve(part, stack);
-				return value == null ? "" : String(value);
-			});
+			return expression
+				.slice(1, -1)
+				.replace(/\$\{([^}]+)\}/g, (_, part: string) => {
+					const value = resolve(part, stack);
+					return value == null ? "" : String(value);
+				});
 		}
 
 		const additions = splitTopLevel(expression, "+");
@@ -312,9 +331,10 @@ function createExtractorResolver(code: string, response: unknown) {
 		if (Number.isFinite(direct)) return direct;
 
 		let arithmetic = expression;
-		const references = expression.match(
-			/[A-Za-z_$][\w$]*(?:(?:\?\.)?\.[A-Za-z0-9_$]+|\[\s*(?:\d+|["'][^"']+["'])\s*\])*/g,
-		) ?? [];
+		const references =
+			expression.match(
+				/[A-Za-z_$][\w$]*(?:(?:\?\.)?\.[A-Za-z0-9_$]+|\[\s*(?:\d+|["'][^"']+["'])\s*\])*/g,
+			) ?? [];
 		for (const referencePart of references) {
 			const value = resolve(referencePart, stack);
 			const number = Number(value);
@@ -327,7 +347,10 @@ function createExtractorResolver(code: string, response: unknown) {
 	return resolve;
 }
 
-function extractPropertyExpression(code: string, property: string): string | null {
+function extractPropertyExpression(
+	code: string,
+	property: string,
+): string | null {
 	const match = code.match(new RegExp(`\\b${property}\\s*:\\s*`));
 	if (!match || match.index == null) return null;
 	const start = match.index + match[0].length;
@@ -339,7 +362,7 @@ function extractPropertyExpression(code: string, property: string): string | nul
 			if (char === quote && code[i - 1] !== "\\") quote = "";
 			continue;
 		}
-		if (char === "\"" || char === "'" || char === "`") {
+		if (char === '"' || char === "'" || char === "`") {
 			quote = char;
 			continue;
 		}
@@ -383,7 +406,9 @@ function formatDuration(milliseconds: number): string {
 }
 
 /** MiniMax Token Plan /v1/token_plan/remains response. */
-function parseMiniMaxTokenPlanCredits(response: unknown): ProviderCredits | null {
+function parseMiniMaxTokenPlanCredits(
+	response: unknown,
+): ProviderCredits | null {
 	if (!response || typeof response !== "object") return null;
 	const root = response as Record<string, unknown>;
 	const data = root.data as Record<string, unknown> | undefined;
@@ -393,11 +418,9 @@ function parseMiniMaxTokenPlanCredits(response: unknown): ProviderCredits | null
 			? data.model_remains
 			: [];
 	const plans = rawRows.filter(
-		(row): row is Record<string, unknown> =>
-			!!row && typeof row === "object",
+		(row): row is Record<string, unknown> => !!row && typeof row === "object",
 	);
-	const plan =
-		plans.find((row) => row.model_name === "general") ?? plans[0];
+	const plan = plans.find((row) => row.model_name === "general") ?? plans[0];
 	if (!plan) return null;
 
 	const interval = Number(plan.current_interval_remaining_percent);
@@ -532,7 +555,11 @@ export class CustomOpenAICompatibleAdapter implements ProviderAdapter {
 		);
 
 		const headers = new Headers();
-		const skipHeaders = new Set(["connection", "keep-alive", "transfer-encoding"]);
+		const skipHeaders = new Set([
+			"connection",
+			"keep-alive",
+			"transfer-encoding",
+		]);
 		upstreamResponse.headers.forEach((value, key) => {
 			if (!skipHeaders.has(key.toLowerCase())) headers.set(key, value);
 		});
@@ -559,7 +586,11 @@ export class CustomOpenAICompatibleAdapter implements ProviderAdapter {
 		);
 
 		const headers = new Headers();
-		const skipHeaders = new Set(["connection", "keep-alive", "transfer-encoding"]);
+		const skipHeaders = new Set([
+			"connection",
+			"keep-alive",
+			"transfer-encoding",
+		]);
 		upstreamResponse.headers.forEach((value, key) => {
 			if (!skipHeaders.has(key.toLowerCase())) headers.set(key, value);
 		});

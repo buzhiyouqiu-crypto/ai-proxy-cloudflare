@@ -6,12 +6,12 @@ import {
 	TrashIcon,
 } from "@heroicons/react/24/outline";
 import { type FormEvent, useState } from "react";
-import { useTranslation } from "react-i18next";
 import toast from "react-hot-toast";
+import { useTranslation } from "react-i18next";
 import { useAuth } from "../../auth";
 import {
-	ModelCatalogSelect,
 	type ModelCatalogOption,
+	ModelCatalogSelect,
 } from "../../components/ModelCatalogSelect";
 import { Button, Card, Input } from "../../components/ui";
 import { useFetch } from "../../hooks/useFetch";
@@ -24,6 +24,8 @@ interface ChannelModel {
 	inputPrice: number;
 	outputPrice: number;
 	imagePrice?: number | null;
+	billingMode?: "usage" | "request";
+	requestPrice?: number | null;
 	contextLength?: number | null;
 	modelType?: "chat" | "embedding";
 }
@@ -85,10 +87,11 @@ const createInitialForm = () => ({
 export function Channels() {
 	const { t } = useTranslation();
 	const { getToken } = useAuth();
-	const { data: channels, loading, refetch } = useFetch<Channel[]>(
-		"/api/admin/channels",
-		{ staleTime: 0 },
-	);
+	const {
+		data: channels,
+		loading,
+		refetch,
+	} = useFetch<Channel[]>("/api/admin/channels", { staleTime: 0 });
 	const { data: catalogModels } = useFetch<ModelCatalogOption[]>(
 		"/api/admin/channels/catalog-models",
 		{ staleTime: 0 },
@@ -154,15 +157,26 @@ export function Channels() {
 				if (
 					model.inputPrice < 0 ||
 					model.outputPrice < 0 ||
-					(model.imagePrice != null && model.imagePrice < 0)
+					(model.imagePrice != null && model.imagePrice < 0) ||
+					(model.requestPrice != null && model.requestPrice < 0)
 				) {
 					throw new Error(`第 ${index + 1} 个模型价格不能为负数`);
+				}
+				if (
+					model.billingMode === "request" &&
+					(model.requestPrice == null || !Number.isFinite(model.requestPrice))
+				) {
+					throw new Error(
+						`第 ${index + 1} 个模型选择按次计费时必须填写请求单价`,
+					);
 				}
 				return {
 					...model,
 					id: model.id.trim(),
 					catalogModelId: model.catalogModelId?.trim() || null,
-					catalogName: model.catalogModelId ? model.catalogName ?? null : null,
+					catalogName: model.catalogModelId
+						? (model.catalogName ?? null)
+						: null,
 					name: model.name?.trim() || model.id.trim(),
 				};
 			});
@@ -178,10 +192,13 @@ export function Channels() {
 				priceMultiplier: Number(form.priceMultiplier) || 1,
 			};
 			if (form.secret.trim()) payload.secret = form.secret.trim();
-			await request(editingId ? `/api/admin/channels/${editingId}` : "/api/admin/channels", {
-				method: editingId ? "PATCH" : "POST",
-				body: JSON.stringify(payload),
-			});
+			await request(
+				editingId ? `/api/admin/channels/${editingId}` : "/api/admin/channels",
+				{
+					method: editingId ? "PATCH" : "POST",
+					body: JSON.stringify(payload),
+				},
+			);
 			const wasEditing = Boolean(editingId);
 			resetForm();
 			refetch();
@@ -195,7 +212,11 @@ export function Channels() {
 
 	const discoverModels = async () => {
 		if (!form.baseUrl || (form.requiresApiKey && !form.secret && !editingId)) {
-			toast.error(form.requiresApiKey ? "请先填写 Base URL 和上游 API Key" : "请先填写 Base URL");
+			toast.error(
+				form.requiresApiKey
+					? "请先填写 Base URL 和上游 API Key"
+					: "请先填写 Base URL",
+			);
 			return;
 		}
 		setDiscovering(true);
@@ -214,7 +235,9 @@ export function Channels() {
 			const models = (body.data as ChannelModel[]) ?? [];
 			if (!models.length) throw new Error("上游没有返回可用模型");
 			setForm((current) => {
-				const merged = new Map(current.models.map((model) => [model.id, model]));
+				const merged = new Map(
+					current.models.map((model) => [model.id, model]),
+				);
 				for (const model of models) {
 					const existing = merged.get(model.id);
 					merged.set(model.id, {
@@ -244,6 +267,8 @@ export function Channels() {
 					inputPrice: Number(current.defaultInputPrice) || 0,
 					outputPrice: Number(current.defaultOutputPrice) || 0,
 					imagePrice: null,
+					billingMode: "usage",
+					requestPrice: null,
 					catalogModelId: null,
 					catalogName: null,
 					modelType: "chat",
@@ -284,16 +309,16 @@ export function Channels() {
 					? `/api/admin/channels/${editingId}/test-extractor`
 					: "/api/admin/channels/test-extractor",
 				{
-				method: "POST",
-				body: JSON.stringify(
-					editingId
-						? { extractorCode: form.extractorCode }
-						: {
-							secret: form.secret,
-							requiresApiKey: form.requiresApiKey,
-							extractorCode: form.extractorCode,
-						},
-				),
+					method: "POST",
+					body: JSON.stringify(
+						editingId
+							? { extractorCode: form.extractorCode }
+							: {
+									secret: form.secret,
+									requiresApiKey: form.requiresApiKey,
+									extractorCode: form.extractorCode,
+								},
+					),
 				},
 			);
 			const result = body.data as {
@@ -341,7 +366,9 @@ export function Channels() {
 	const refreshBalance = async (channel: Channel) => {
 		setRefreshingId(channel.id);
 		try {
-			await request(`/api/admin/channels/${channel.id}/refresh-balance`, { method: "POST" });
+			await request(`/api/admin/channels/${channel.id}/refresh-balance`, {
+				method: "POST",
+			});
 			refetch();
 			toast.success("余额已刷新");
 		} catch (error) {
@@ -376,7 +403,9 @@ export function Channels() {
 				<form onSubmit={handleSubmit} className="space-y-4">
 					<div className="grid gap-4 sm:grid-cols-2">
 						<label className="space-y-1 text-sm">
-							<span className="font-medium text-gray-700 dark:text-gray-300">渠道名称</span>
+							<span className="font-medium text-gray-700 dark:text-gray-300">
+								渠道名称
+							</span>
 							<Input
 								required
 								value={form.name}
@@ -385,7 +414,9 @@ export function Channels() {
 							/>
 						</label>
 						<label className="space-y-1 text-sm">
-							<span className="font-medium text-gray-700 dark:text-gray-300">Base URL</span>
+							<span className="font-medium text-gray-700 dark:text-gray-300">
+								Base URL
+							</span>
 							<Input
 								required
 								type="url"
@@ -395,19 +426,25 @@ export function Channels() {
 							/>
 						</label>
 						<label className="space-y-1 text-sm">
-							<span className="font-medium text-gray-700 dark:text-gray-300">渠道官网（可选）</span>
+							<span className="font-medium text-gray-700 dark:text-gray-300">
+								渠道官网（可选）
+							</span>
 							<Input
 								type="url"
 								value={form.websiteUrl}
 								placeholder="https://example.com"
-								onChange={(e) => setForm({ ...form, websiteUrl: e.target.value })}
+								onChange={(e) =>
+									setForm({ ...form, websiteUrl: e.target.value })
+								}
 							/>
 						</label>
 					</div>
 
 					<div className="block space-y-1 text-sm">
 						<div className="flex flex-wrap items-center justify-between gap-3">
-							<span className="font-medium text-gray-700 dark:text-gray-300">上游 API Key</span>
+							<span className="font-medium text-gray-700 dark:text-gray-300">
+								上游 API Key
+							</span>
 							<label className="inline-flex cursor-pointer items-center gap-2 text-xs text-gray-600 dark:text-gray-400">
 								<input
 									type="checkbox"
@@ -447,23 +484,31 @@ export function Channels() {
 
 					<div className="grid gap-4 sm:grid-cols-2">
 						<label className="space-y-1 text-sm">
-							<span className="font-medium text-gray-700 dark:text-gray-300">默认输入价格（USD / 1M）</span>
+							<span className="font-medium text-gray-700 dark:text-gray-300">
+								默认输入价格（USD / 1M）
+							</span>
 							<Input
 								type="number"
 								min="0"
 								step="0.000001"
 								value={form.defaultInputPrice}
-								onChange={(e) => setForm({ ...form, defaultInputPrice: e.target.value })}
+								onChange={(e) =>
+									setForm({ ...form, defaultInputPrice: e.target.value })
+								}
 							/>
 						</label>
 						<label className="space-y-1 text-sm">
-							<span className="font-medium text-gray-700 dark:text-gray-300">默认输出价格（USD / 1M）</span>
+							<span className="font-medium text-gray-700 dark:text-gray-300">
+								默认输出价格（USD / 1M）
+							</span>
 							<Input
 								type="number"
 								min="0"
 								step="0.000001"
 								value={form.defaultOutputPrice}
-								onChange={(e) => setForm({ ...form, defaultOutputPrice: e.target.value })}
+								onChange={(e) =>
+									setForm({ ...form, defaultOutputPrice: e.target.value })
+								}
 							/>
 						</label>
 					</div>
@@ -475,14 +520,24 @@ export function Channels() {
 									模型配置
 								</span>
 								<p className="text-xs text-gray-500">
-									先点击“获取模型”，再为每个上游模型选择要展示的已有规范模型；不选择则保留原始 ID。
+									先点击“获取模型”，再为每个上游模型选择要展示的已有规范模型；不选择则保留原始
+									ID。
 								</p>
 							</div>
 							<div className="flex gap-2">
-								<Button type="button" variant="secondary" onClick={addManualModel}>
+								<Button
+									type="button"
+									variant="secondary"
+									onClick={addManualModel}
+								>
 									手动添加
 								</Button>
-								<Button type="button" variant="secondary" onClick={discoverModels} disabled={discovering}>
+								<Button
+									type="button"
+									variant="secondary"
+									onClick={discoverModels}
+									disabled={discovering}
+								>
 									{discovering ? "获取中…" : "获取模型"}
 								</Button>
 							</div>
@@ -498,17 +553,23 @@ export function Channels() {
 										key={`${model.id}-${index}`}
 										className="rounded-lg border border-gray-200 p-3 dark:border-white/10"
 									>
-										<div className="grid gap-3 lg:grid-cols-7">
+										<div className="grid gap-3 lg:grid-cols-8">
 											<label className="space-y-1 text-xs lg:col-span-2">
-												<span className="font-medium text-gray-700 dark:text-gray-300">上游模型 ID</span>
+												<span className="font-medium text-gray-700 dark:text-gray-300">
+													上游模型 ID
+												</span>
 												<Input
 													value={model.id}
 													placeholder="gpt-5.6-luna"
-													onChange={(e) => updateModel(index, { id: e.target.value })}
+													onChange={(e) =>
+														updateModel(index, { id: e.target.value })
+													}
 												/>
 											</label>
 											<label className="space-y-1 text-xs lg:col-span-2">
-												<span className="font-medium text-gray-700 dark:text-gray-300">规范模型（可选）</span>
+												<span className="font-medium text-gray-700 dark:text-gray-300">
+													规范模型（可选）
+												</span>
 												<ModelCatalogSelect
 													options={catalogModels ?? []}
 													value={model.catalogModelId}
@@ -519,64 +580,139 @@ export function Channels() {
 															catalogName: option?.name ?? null,
 															...(option
 																? {
-																	inputPrice: option.inputPrice,
-																	outputPrice: option.outputPrice,
-																	contextLength: option.contextLength,
-																	modelType: option.modelType,
-																	name: option.name || model.name || model.id,
-																}
+																		inputPrice: option.inputPrice,
+																		outputPrice: option.outputPrice,
+																		contextLength: option.contextLength,
+																		modelType: option.modelType,
+																		name: option.name || model.name || model.id,
+																	}
 																: {
-																	name:
-																		model.name === model.catalogName ? model.id : model.name,
+																		name:
+																			model.name === model.catalogName
+																				? model.id
+																				: model.name,
 																	}),
-															});
+														});
 													}}
 												/>
 											</label>
 											<label className="space-y-1 text-xs">
-												<span className="font-medium text-gray-700 dark:text-gray-300">输入价 / 1M</span>
+												<span className="font-medium text-gray-700 dark:text-gray-300">
+													输入价 / 1M
+												</span>
 												<Input
 													type="number"
 													min="0"
 													step="0.000001"
 													value={model.inputPrice}
-													onChange={(e) => updateModel(index, { inputPrice: Number(e.target.value) || 0 })}
+													onChange={(e) =>
+														updateModel(index, {
+															inputPrice: Number(e.target.value) || 0,
+														})
+													}
 												/>
 											</label>
 											<label className="space-y-1 text-xs">
-												<span className="font-medium text-gray-700 dark:text-gray-300">输出价 / 1M</span>
+												<span className="font-medium text-gray-700 dark:text-gray-300">
+													输出价 / 1M
+												</span>
 												<Input
 													type="number"
 													min="0"
 													step="0.000001"
 													value={model.outputPrice}
-													onChange={(e) => updateModel(index, { outputPrice: Number(e.target.value) || 0 })}
+													onChange={(e) =>
+														updateModel(index, {
+															outputPrice: Number(e.target.value) || 0,
+														})
+													}
 												/>
 											</label>
 											<label className="space-y-1 text-xs">
-												<span className="font-medium text-gray-700 dark:text-gray-300">图片单价 / 张</span>
-												<Input
-													type="number"
-													min="0"
-													step="0.000001"
-																value={model.imagePrice ?? ""}
-																placeholder="可选"
-																onChange={(e) => {
-																	const value = e.target.value;
-																	updateModel(index, {
-																		imagePrice: value === "" ? null : Number(value) || 0,
-																	});
-															}}
-												/>
-												<span className="text-[11px] text-gray-500">上游不返回 usage 时按此价格兜底扣费</span>
+												<span className="font-medium text-gray-700 dark:text-gray-300">
+													计费方式
+												</span>
+												<select
+													value={model.billingMode ?? "usage"}
+													onChange={(e) =>
+														updateModel(index, {
+															billingMode: e.target.value as
+																| "usage"
+																| "request",
+														})
+													}
+													className="block min-h-10 w-full rounded-lg border border-gray-200 bg-white px-3.5 py-2 text-sm text-gray-900 focus:border-brand-500 focus:outline-none focus:ring-2 focus:ring-brand-500/20 dark:border-white/10 dark:bg-white/5 dark:text-white"
+												>
+													<option value="usage">按量</option>
+													<option value="request">按次</option>
+												</select>
 											</label>
+											{model.billingMode === "request" ? (
+												<label className="space-y-1 text-xs">
+													<span className="font-medium text-gray-700 dark:text-gray-300">
+														请求单价 / 次
+													</span>
+													<Input
+														type="number"
+														min="0"
+														step="0.000001"
+														value={model.requestPrice ?? ""}
+														placeholder="例如 0.04"
+														onChange={(e) => {
+															const value = e.target.value;
+															updateModel(index, {
+																requestPrice:
+																	value === "" ? null : Number(value) || 0,
+															});
+														}}
+													/>
+													<span className="text-[11px] text-gray-500">
+														每次 API 请求固定扣一次，与 n 无关
+													</span>
+												</label>
+											) : (
+												<label className="space-y-1 text-xs">
+													<span className="font-medium text-gray-700 dark:text-gray-300">
+														图片单价 / 张
+													</span>
+													<Input
+														type="number"
+														min="0"
+														step="0.000001"
+														value={model.imagePrice ?? ""}
+														placeholder="可选"
+														onChange={(e) => {
+															const value = e.target.value;
+															updateModel(index, {
+																imagePrice:
+																	value === "" ? null : Number(value) || 0,
+															});
+														}}
+													/>
+													<span className="text-[11px] text-gray-500">
+														按图片 usage 计费时的兜底单价
+													</span>
+												</label>
+											)}
 										</div>
 										<div className="mt-3 flex items-end gap-3">
 											<label className="min-w-0 flex-1 space-y-1 text-xs">
-												<span className="font-medium text-gray-700 dark:text-gray-300">显示名称</span>
-												<Input value={model.name ?? ""} onChange={(e) => updateModel(index, { name: e.target.value })} />
+												<span className="font-medium text-gray-700 dark:text-gray-300">
+													显示名称
+												</span>
+												<Input
+													value={model.name ?? ""}
+													onChange={(e) =>
+														updateModel(index, { name: e.target.value })
+													}
+												/>
 											</label>
-											<Button type="button" variant="destructive" size="sm" onClick={() => removeModel(index)}>
+											<Button
+												type="button"
+												variant="destructive"
+												size="sm"
+												onClick={() => removeModel(index)}
+											>
 												删除
 											</Button>
 										</div>
@@ -588,32 +724,50 @@ export function Channels() {
 
 					<label className="block space-y-1 text-sm">
 						<div className="flex flex-wrap items-center justify-between gap-2">
-							<span className="font-medium text-gray-700 dark:text-gray-300">余额提取器代码（管理员可见）</span>
-							<Button type="button" variant="secondary" size="sm" onClick={testExtractor} disabled={testingExtractor}>
+							<span className="font-medium text-gray-700 dark:text-gray-300">
+								余额提取器代码（管理员可见）
+							</span>
+							<Button
+								type="button"
+								variant="secondary"
+								size="sm"
+								onClick={testExtractor}
+								disabled={testingExtractor}
+							>
 								{testingExtractor ? "测试中…" : "测试提取器"}
 							</Button>
 						</div>
 						<textarea
 							rows={11}
 							value={form.extractorCode}
-							onChange={(e) => setForm({ ...form, extractorCode: e.target.value })}
+							onChange={(e) =>
+								setForm({ ...form, extractorCode: e.target.value })
+							}
 							className="block w-full rounded-lg border border-gray-200 bg-white px-3.5 py-2 font-mono text-xs text-gray-900 placeholder:text-gray-400 focus:border-brand-500 focus:outline-none focus:ring-2 focus:ring-brand-500/20 dark:border-white/10 dark:bg-white/5 dark:text-white"
 						/>
 						<span className="text-xs text-gray-500">
-							测试只请求上游并解析结果，不会保存渠道；支持 request.url/method/headers、response 字段路径、变量和简单加减乘除。用 {"{{API_KEY}}"} 代表上游 Key；返回 unit 为 USD/CNY 时按金额处理，返回 display/extra 或百分比 unit 时按配额文本展示。
+							测试只请求上游并解析结果，不会保存渠道；支持
+							request.url/method/headers、response
+							字段路径、变量和简单加减乘除。用 {"{{API_KEY}}"} 代表上游
+							Key；返回 unit 为 USD/CNY 时按金额处理，返回 display/extra
+							或百分比 unit 时按配额文本展示。
 						</span>
 					</label>
 
 					<div className="flex items-end gap-4">
 						<label className="w-40 space-y-1 text-sm">
-							<span className="font-medium text-gray-700 dark:text-gray-300">价格乘数</span>
+							<span className="font-medium text-gray-700 dark:text-gray-300">
+								价格乘数
+							</span>
 							<Input
 								type="number"
 								min="0.01"
 								max="10"
 								step="0.01"
 								value={form.priceMultiplier}
-								onChange={(e) => setForm({ ...form, priceMultiplier: e.target.value })}
+								onChange={(e) =>
+									setForm({ ...form, priceMultiplier: e.target.value })
+								}
 							/>
 						</label>
 						{editingId && (
@@ -629,7 +783,9 @@ export function Channels() {
 			</Card>
 
 			<Card>
-				<h2 className="font-semibold text-gray-900 dark:text-white">已配置渠道</h2>
+				<h2 className="font-semibold text-gray-900 dark:text-white">
+					已配置渠道
+				</h2>
 				{loading ? (
 					<p className="mt-4 text-sm text-gray-500">加载中…</p>
 				) : !channels?.length ? (
@@ -643,14 +799,24 @@ export function Channels() {
 							>
 								<div className="min-w-0">
 									<div className="flex items-center gap-2">
-										<span className="font-medium text-gray-900 dark:text-white">{channel.name}</span>
-										<span className={`rounded-full px-2 py-0.5 text-xs ${channel.isEnabled ? "bg-green-100 text-green-700" : "bg-gray-100 text-gray-500"}`}>
+										<span className="font-medium text-gray-900 dark:text-white">
+											{channel.name}
+										</span>
+										<span
+											className={`rounded-full px-2 py-0.5 text-xs ${channel.isEnabled ? "bg-green-100 text-green-700" : "bg-gray-100 text-gray-500"}`}
+										>
 											{channel.isEnabled ? "已启用" : "已停用"}
 										</span>
 									</div>
-									<div className="mt-1 truncate text-xs text-gray-500">{channel.baseUrl}</div>
+									<div className="mt-1 truncate text-xs text-gray-500">
+										{channel.baseUrl}
+									</div>
 									<div className="mt-1 text-xs text-gray-500">
-										{channel.models.length} 个模型 · {channel.requiresApiKey ? `Key ${channel.secretHint}` : "无需 Key"} · ×{channel.priceMultiplier}
+										{channel.models.length} 个模型 ·{" "}
+										{channel.requiresApiKey
+											? `Key ${channel.secretHint}`
+											: "无需 Key"}{" "}
+										· ×{channel.priceMultiplier}
 									</div>
 									<div className="mt-1 text-xs text-gray-500">
 										{channel.hasExtractor
@@ -661,21 +827,40 @@ export function Channels() {
 									</div>
 								</div>
 								<div className="flex shrink-0 gap-2">
-									<Button variant="secondary" size="sm" onClick={() => editChannel(channel)}>
+									<Button
+										variant="secondary"
+										size="sm"
+										onClick={() => editChannel(channel)}
+									>
 										<PencilSquareIcon className="size-4" />
 										编辑
 									</Button>
 									{channel.hasExtractor && (
-										<Button variant="secondary" size="sm" onClick={() => refreshBalance(channel)} disabled={refreshingId === channel.id}>
-											<ArrowPathIcon className={`size-4 ${refreshingId === channel.id ? "animate-spin" : ""}`} />
+										<Button
+											variant="secondary"
+											size="sm"
+											onClick={() => refreshBalance(channel)}
+											disabled={refreshingId === channel.id}
+										>
+											<ArrowPathIcon
+												className={`size-4 ${refreshingId === channel.id ? "animate-spin" : ""}`}
+											/>
 											刷新余额
 										</Button>
 									)}
-									<Button variant="secondary" size="sm" onClick={() => updateChannel(channel)}>
+									<Button
+										variant="secondary"
+										size="sm"
+										onClick={() => updateChannel(channel)}
+									>
 										<PowerIcon className="size-4" />
 										{channel.isEnabled ? "停用" : "启用"}
 									</Button>
-									<Button variant="destructive" size="sm" onClick={() => deleteChannel(channel)}>
+									<Button
+										variant="destructive"
+										size="sm"
+										onClick={() => deleteChannel(channel)}
+									>
 										<TrashIcon className="size-4" />
 										删除
 									</Button>
@@ -687,7 +872,9 @@ export function Channels() {
 			</Card>
 
 			<p className="text-sm text-gray-500 dark:text-gray-400">
-				预置服务商（OpenRouter、DeepSeek、OpenAI 等）仍可在“自有密钥”页面添加；本页适合 ultrarouter、OneAPI 或其他 OpenAI 兼容中转地址。
+				预置服务商（OpenRouter、DeepSeek、OpenAI
+				等）仍可在“自有密钥”页面添加；本页适合 ultrarouter、OneAPI 或其他 OpenAI
+				兼容中转地址。
 			</p>
 		</div>
 	);

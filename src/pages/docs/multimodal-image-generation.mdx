@@ -29,7 +29,10 @@ curl https://keyaos.com/v1/images/edits \
   -F "image=@input.png"
 ```
 
-In the administrator custom-channel model settings, optionally set **图片单价 / 张**. It is used as the per-image fallback charge when an upstream response does not include usage information; token/cost usage returned by the upstream takes precedence.
+In the administrator custom-channel model settings, choose the billing mode per model:
+
+- **按量** — charge according to upstream token/image usage. For image APIs, **图片单价 / 张** is used when the upstream response does not include usage information.
+- **按次** — charge the configured **请求单价 / 次** once for each API request. For example, an image request with `n: 4` is still charged once, not four times.
 
 ## Basic Usage
 

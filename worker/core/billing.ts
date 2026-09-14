@@ -29,9 +29,14 @@ export function calculateBaseCost(
 		inputPricePerM: number;
 		outputPricePerM: number;
 		imagePricePerImage?: number | null;
+		billingMode?: "usage" | "request";
+		requestPrice?: number | null;
 	},
 	usage: TokenUsage,
 ): number {
+	if (modelPrice.billingMode === "request" && modelPrice.requestPrice != null) {
+		return modelPrice.requestPrice;
+	}
 	const reportedCost = usage.cost ?? usage.estimated_cost;
 	if (reportedCost != null && reportedCost > 0) return reportedCost;
 

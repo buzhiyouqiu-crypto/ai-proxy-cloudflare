@@ -22,6 +22,8 @@ export interface DispatchResult {
 		inputPricePerM: number;
 		outputPricePerM: number;
 		imagePricePerImage: number | null;
+		billingMode: "usage" | "request";
+		requestPrice: number | null;
 	};
 }
 
@@ -33,6 +35,28 @@ function readImagePrice(metadata: string | null): number | null {
 		};
 		if (value.imagePricePerImage == null) return null;
 		const price = Number(value.imagePricePerImage);
+		return Number.isFinite(price) && price >= 0 ? price : null;
+	} catch {
+		return null;
+	}
+}
+
+function readBillingMode(metadata: string | null): "usage" | "request" {
+	if (!metadata) return "usage";
+	try {
+		const value = JSON.parse(metadata) as { billingMode?: unknown };
+		return value.billingMode === "request" ? "request" : "usage";
+	} catch {
+		return "usage";
+	}
+}
+
+function readRequestPrice(metadata: string | null): number | null {
+	if (!metadata) return null;
+	try {
+		const value = JSON.parse(metadata) as { requestPrice?: unknown };
+		if (value.requestPrice == null) return null;
+		const price = Number(value.requestPrice);
 		return Number.isFinite(price) && price >= 0 ? price : null;
 	} catch {
 		return null;
@@ -95,7 +119,10 @@ export async function dispatchAll(
 			(!customChannelId || !specificCustomChannelIds.has(customChannelId))
 		)
 			continue;
-		if (providerFilter.length > 0 && !providerFilter.includes(offering.provider_id))
+		if (
+			providerFilter.length > 0 &&
+			!providerFilter.includes(offering.provider_id)
+		)
 			continue;
 		if (excludeProviderIds?.includes(offering.provider_id)) continue;
 		if (offering.input_price < 0 || offering.output_price < 0) continue;
@@ -133,6 +160,8 @@ export async function dispatchAll(
 				registeredProvider ?? createCustomProvider(credential);
 			if (!provider) continue;
 			const imagePrice = readImagePrice(offering.metadata);
+			const billingMode = readBillingMode(offering.metadata);
+			const requestPrice = readRequestPrice(offering.metadata);
 			candidates.push({
 				credential,
 				provider,
@@ -145,6 +174,11 @@ export async function dispatchAll(
 						imagePrice == null
 							? null
 							: imagePrice * credential.price_multiplier,
+					billingMode,
+					requestPrice:
+						requestPrice == null
+							? null
+							: requestPrice * credential.price_multiplier,
 				},
 			});
 		}
@@ -153,7 +187,11 @@ export async function dispatchAll(
 	if (candidates.length === 0) throw new NoKeyAvailableError(modelId);
 
 	candidates.sort((a, b) => {
-		const diff = a.modelPrice.inputPricePerM - b.modelPrice.inputPricePerM;
+		const effectivePrice = (candidate: DispatchResult) =>
+			candidate.modelPrice.billingMode === "request"
+				? (candidate.modelPrice.requestPrice ?? Number.POSITIVE_INFINITY)
+				: candidate.modelPrice.inputPricePerM;
+		const diff = effectivePrice(a) - effectivePrice(b);
 		return diff !== 0 ? diff : Math.random() - 0.5;
 	});
 	return candidates;

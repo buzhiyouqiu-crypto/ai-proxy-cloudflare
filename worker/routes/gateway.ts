@@ -24,13 +24,13 @@ import {
 	settleWallets,
 } from "../platform/billing/settlement";
 import { WalletDao } from "../platform/billing/wallet-dao";
+import { isPublicCustomChannelProviderId } from "../shared/custom-channel-identity";
 import {
 	ApiError,
 	CreditsExhaustedNoFallbackError,
 	ModelNotAllowedError,
 	NoKeyAvailableError,
 } from "../shared/errors";
-import { isPublicCustomChannelProviderId } from "../shared/custom-channel-identity";
 import { requestLogger } from "../shared/logger";
 import type { AppEnv } from "../shared/types";
 
@@ -259,15 +259,24 @@ async function execute(
 					? cloneImageEditForm(req.body as FormData, upstreamModel)
 					: { ...(req.body as Record<string, unknown>), model: upstreamModel };
 		const fallbackUsage =
-			(mode === "image-generation" || mode === "image-edit") &&
-			modelPrice.imagePricePerImage != null
+			modelPrice.billingMode === "request" && modelPrice.requestPrice != null
 				? {
 						prompt_tokens: 0,
 						completion_tokens: 0,
 						total_tokens: 0,
-						image_count: imageCount(upstreamBody),
+						...(mode === "image-generation" || mode === "image-edit"
+							? { image_count: imageCount(upstreamBody) }
+							: {}),
 					}
-				: undefined;
+				: (mode === "image-generation" || mode === "image-edit") &&
+						modelPrice.imagePricePerImage != null
+					? {
+							prompt_tokens: 0,
+							completion_tokens: 0,
+							total_tokens: 0,
+							image_count: imageCount(upstreamBody),
+						}
+					: undefined;
 
 		try {
 			const secret = await credDao.decryptSecret(credential);

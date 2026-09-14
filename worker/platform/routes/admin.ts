@@ -3,11 +3,12 @@ import { z } from "zod";
 import { CandleDao } from "../../core/db/candle-dao";
 import { CatalogDao } from "../../core/db/catalog-dao";
 import { CredentialsDao } from "../../core/db/credentials-dao";
+import type { DbCredential } from "../../core/db/schema";
 import {
+	type CustomChannelModel,
 	createCustomProvider,
 	parseCustomChannelMetadata,
 	testCustomExtractor,
-	type CustomChannelModel,
 } from "../../core/providers/custom-openai-compatible";
 import {
 	syncAllModels,
@@ -29,7 +30,6 @@ import {
 	writeBalanceSnapshot,
 } from "../../shared/provider-balance";
 import type { AppEnv } from "../../shared/types";
-import type { DbCredential } from "../../core/db/schema";
 import { parse } from "../../shared/validate";
 import { AdminDao } from "../billing/admin-dao";
 import { GiftCardDao } from "../billing/gift-card-dao";
@@ -44,7 +44,15 @@ const CustomModelInput = z.object({
 	inputPrice: z.number().min(0).max(1_000_000),
 	outputPrice: z.number().min(0).max(1_000_000),
 	imagePrice: z.number().min(0).max(1_000_000).nullable().optional(),
-	contextLength: z.number().int().positive().max(10_000_000).nullable().optional(),
+	billingMode: z.enum(["usage", "request"]).optional(),
+	requestPrice: z.number().min(0).max(1_000_000).nullable().optional(),
+	contextLength: z
+		.number()
+		.int()
+		.positive()
+		.max(10_000_000)
+		.nullable()
+		.optional(),
 	modelType: z.enum(["chat", "embedding"]).optional(),
 });
 
@@ -114,16 +122,29 @@ function customCatalogEntries(
 				pricing: {
 					prompt: String(model.inputPrice / 1_000_000),
 					completion: String(model.outputPrice / 1_000_000),
-					image:
-						model.imagePrice == null
-							? null
-							: String(model.imagePrice),
+					image: model.imagePrice == null ? null : String(model.imagePrice),
 				},
 				imagePricePerImage: model.imagePrice ?? null,
+				billingMode: model.billingMode === "request" ? "request" : "usage",
+				requestPrice: model.requestPrice ?? null,
 			}),
 			created: Date.now(),
 		};
 	});
+}
+
+function validateCustomModelBilling(models: CustomChannelModel[]): void {
+	for (const model of models) {
+		if (
+			model.billingMode === "request" &&
+			(model.requestPrice == null || !Number.isFinite(model.requestPrice))
+		) {
+			throw new BadRequestError(
+				`模型 ${model.id} 使用按次计费时必须填写请求单价`,
+				"request_price_required",
+			);
+		}
+	}
 }
 
 async function rebuildCustomCatalog(db: D1Database): Promise<void> {
@@ -302,10 +323,7 @@ admin.post("/remask", async (c) => {
 
 admin.get("/channels", async (c) => {
 	const encryptionKey = c.env.ENCRYPTION_KEY;
-	const rows = await new CredentialsDao(
-		c.env.DB,
-		encryptionKey,
-	).getGlobal();
+	const rows = await new CredentialsDao(c.env.DB, encryptionKey).getGlobal();
 	const channels = await Promise.all(
 		rows
 			.filter((row) => row.provider_id === "custom")
@@ -315,11 +333,7 @@ admin.get("/channels", async (c) => {
 					id: row.id,
 					publicProviderId: publicCustomChannelProviderId(row.id),
 					publicName: publicCustomChannelName(row.id),
-					name: await resolveCustomChannelName(
-						channel,
-						row.id,
-						encryptionKey,
-					),
+					name: await resolveCustomChannelName(channel, row.id, encryptionKey),
 					baseUrl: channel?.baseUrl ?? "",
 					requiresApiKey: channel?.requiresApiKey !== false,
 					websiteUrl: channel?.websiteUrl ?? null,
@@ -349,7 +363,11 @@ admin.get("/channels/catalog-models", async (c) => {
 		const organization = modelId.includes("/")
 			? modelId.slice(0, modelId.indexOf("/"))
 			: null;
-		if (providerId === organization || (!organization && providerId === "openai")) return 0;
+		if (
+			providerId === organization ||
+			(!organization && providerId === "openai")
+		)
+			return 0;
 		if (providerId === "openrouter") return 1;
 		if (providerId === "custom") return 3;
 		return 2;
@@ -358,13 +376,13 @@ admin.get("/channels/catalog-models", async (c) => {
 		string,
 		{
 			id: string;
-				name: string | null;
-				providerId: string;
-				modelType: "chat" | "embedding";
-				inputPrice: number;
-				outputPrice: number;
-				contextLength: number | null;
-			}
+			name: string | null;
+			providerId: string;
+			modelType: "chat" | "embedding";
+			inputPrice: number;
+			outputPrice: number;
+			contextLength: number | null;
+		}
 	>();
 	for (const row of rows) {
 		const current = options.get(row.model_id);
@@ -396,7 +414,9 @@ function modelEndpointCandidates(baseUrl: string): string[] {
 		.replace(/\/(chat\/completions|embeddings|models)$/i, "")
 		.replace(/\/+$/, "");
 	const root = normalized.replace(/\/v1$/i, "");
-	return [...new Set([`${normalized}/models`, `${root}/v1/models`, `${root}/models`])];
+	return [
+		...new Set([`${normalized}/models`, `${root}/v1/models`, `${root}/models`]),
+	];
 }
 
 function discoveredModelRows(
@@ -463,7 +483,10 @@ function discoveredModelRows(
 					? (item.pricing as Record<string, unknown>)
 					: {};
 			const input =
-				pricing.prompt ?? pricing.input_tokens ?? item.input_price ?? item.inputPrice;
+				pricing.prompt ??
+				pricing.input_tokens ??
+				item.input_price ??
+				item.inputPrice;
 			const output =
 				pricing.completion ??
 				pricing.output_tokens ??
@@ -518,13 +541,17 @@ admin.post("/channels/discover-models", async (c) => {
 		)
 			.bind(body.channelId)
 			.first<DbCredential>();
-		if (!row) throw new BadRequestError("Channel not found", "credential_not_found");
+		if (!row)
+			throw new BadRequestError("Channel not found", "credential_not_found");
 		const channel = parseCustomChannelMetadata(row.metadata);
 		requiresApiKey =
 			body.requiresApiKey === undefined
 				? channel?.requiresApiKey !== false
 				: body.requiresApiKey;
-		secret = await new CredentialsDao(c.env.DB, c.env.ENCRYPTION_KEY).decryptSecret(row);
+		secret = await new CredentialsDao(
+			c.env.DB,
+			c.env.ENCRYPTION_KEY,
+		).decryptSecret(row);
 	}
 	if (requiresApiKey && !secret) {
 		throw new BadRequestError(
@@ -543,9 +570,17 @@ admin.post("/channels/discover-models", async (c) => {
 			lastStatus = response.status;
 			if (!response.ok) continue;
 			const raw = await response.json().catch(() => ({}));
-			const models = discoveredModelRows(raw, body.inputPrice, body.outputPrice);
+			const models = discoveredModelRows(
+				raw,
+				body.inputPrice,
+				body.outputPrice,
+			);
 			if (models.length > 0) {
-				return c.json({ data: models, count: models.length, source: modelsUrl });
+				return c.json({
+					data: models,
+					count: models.length,
+					source: modelsUrl,
+				});
 			}
 		} catch {
 			// Try the next common OpenAI-compatible endpoint shape.
@@ -571,7 +606,10 @@ admin.post("/channels/test-extractor", async (c) => {
 			throw new BadRequestError("Invalid JSON body", "invalid_json");
 		}),
 	);
-	const credits = await testCustomExtractor(body.extractorCode, body.secret ?? "");
+	const credits = await testCustomExtractor(
+		body.extractorCode,
+		body.secret ?? "",
+	);
 	if (!credits) {
 		throw new BadRequestError(
 			"The extractor did not return a readable balance",
@@ -603,7 +641,8 @@ admin.post("/channels/:id/test-extractor", async (c) => {
 	)
 		.bind(id)
 		.first<DbCredential>();
-	if (!row) throw new BadRequestError("Channel not found", "credential_not_found");
+	if (!row)
+		throw new BadRequestError("Channel not found", "credential_not_found");
 	const credits = await testCustomExtractor(
 		body.extractorCode,
 		await new CredentialsDao(c.env.DB, c.env.ENCRYPTION_KEY).decryptSecret(row),
@@ -635,6 +674,7 @@ admin.post("/channels", async (c) => {
 	);
 	const secret = body.secret ?? "";
 	const requiresApiKey = body.requiresApiKey !== false;
+	validateCustomModelBilling(body.models);
 	if (requiresApiKey && !secret) {
 		throw new BadRequestError(
 			"请填写上游 API Key，或勾选上游不需要 API Key",
@@ -661,7 +701,10 @@ admin.post("/channels", async (c) => {
 	};
 	const dao = new CredentialsDao(c.env.DB, c.env.ENCRYPTION_KEY);
 	if (secret && (await dao.existsBySecretHash(secret))) {
-		throw new BadRequestError("This upstream key is already configured", "credential_duplicate");
+		throw new BadRequestError(
+			"This upstream key is already configured",
+			"credential_duplicate",
+		);
 	}
 
 	const id = `cred_${crypto.randomUUID()}`;
@@ -702,24 +745,32 @@ admin.post("/channels/:id/refresh-balance", async (c) => {
 	)
 		.bind(id)
 		.first<DbCredential>();
-	if (!row) throw new BadRequestError("Channel not found", "credential_not_found");
+	if (!row)
+		throw new BadRequestError("Channel not found", "credential_not_found");
 
 	const provider = createCustomProvider(row);
 	if (!provider) {
-		throw new BadRequestError("This channel has no valid extractor", "extractor_required");
+		throw new BadRequestError(
+			"This channel has no valid extractor",
+			"extractor_required",
+		);
 	}
 	const credits = await provider.fetchCredits(
 		await new CredentialsDao(c.env.DB, c.env.ENCRYPTION_KEY).decryptSecret(row),
 	);
 	if (!credits) {
-		throw new BadRequestError("The extractor did not return a balance", "balance_extract_failed");
+		throw new BadRequestError(
+			"The extractor did not return a balance",
+			"balance_extract_failed",
+		);
 	}
 	const dao = new CredentialsDao(c.env.DB, c.env.ENCRYPTION_KEY);
 	await dao.updateMetadata(id, writeBalanceSnapshot(row.metadata, credits));
 	let quota = row.quota;
 	if (credits.remaining != null && isMonetaryBalance(credits, "USD")) {
 		const rate = Number.parseFloat(c.env.CNY_USD_RATE || "7");
-		quota = credits.currency === "CNY" ? credits.remaining / rate : credits.remaining;
+		quota =
+			credits.currency === "CNY" ? credits.remaining / rate : credits.remaining;
 		await dao.updateQuota(id, quota, "auto");
 	}
 	return c.json({
@@ -752,8 +803,14 @@ admin.patch("/channels/:id", async (c) => {
 		"defaultOutputPrice",
 		"extractorCode",
 	] as const;
-	const hasChannelUpdate = channelFields.some((field) => body[field] !== undefined);
-	if (!hasChannelUpdate && body.isEnabled == null && body.priceMultiplier == null) {
+	const hasChannelUpdate = channelFields.some(
+		(field) => body[field] !== undefined,
+	);
+	if (
+		!hasChannelUpdate &&
+		body.isEnabled == null &&
+		body.priceMultiplier == null
+	) {
 		throw new BadRequestError("No settings to update", "settings_required");
 	}
 
@@ -763,12 +820,16 @@ admin.patch("/channels/:id", async (c) => {
 	)
 		.bind(id)
 		.first<DbCredential>();
-	if (!row) throw new BadRequestError("Channel not found", "credential_not_found");
+	if (!row)
+		throw new BadRequestError("Channel not found", "credential_not_found");
 
 	if (hasChannelUpdate) {
 		const current = parseCustomChannelMetadata(row.metadata);
 		if (!current) {
-			throw new BadRequestError("Invalid custom channel metadata", "channel_invalid");
+			throw new BadRequestError(
+				"Invalid custom channel metadata",
+				"channel_invalid",
+			);
 		}
 		const currentName = await resolveCustomChannelName(
 			current,
@@ -783,32 +844,48 @@ admin.patch("/channels/:id", async (c) => {
 				c.env.ENCRYPTION_KEY,
 			),
 			baseUrl: body.baseUrl?.replace(/\/+$/, "") ?? current.baseUrl,
-			requiresApiKey:
-				body.requiresApiKey ?? current.requiresApiKey !== false,
-			websiteUrl: body.websiteUrl === undefined ? current.websiteUrl ?? null : body.websiteUrl,
+			requiresApiKey: body.requiresApiKey ?? current.requiresApiKey !== false,
+			websiteUrl:
+				body.websiteUrl === undefined
+					? (current.websiteUrl ?? null)
+					: body.websiteUrl,
 			models: body.models ?? current.models,
-			defaultInputPrice: body.defaultInputPrice ?? current.defaultInputPrice ?? 0,
-			defaultOutputPrice: body.defaultOutputPrice ?? current.defaultOutputPrice ?? 0,
+			defaultInputPrice:
+				body.defaultInputPrice ?? current.defaultInputPrice ?? 0,
+			defaultOutputPrice:
+				body.defaultOutputPrice ?? current.defaultOutputPrice ?? 0,
 			extractorCode:
 				body.extractorCode === undefined
-					? current.extractorCode ?? null
+					? (current.extractorCode ?? null)
 					: body.extractorCode?.trim() || null,
 		};
+		validateCustomModelBilling(metadata.models);
 		const url = new URL(metadata.baseUrl);
 		if (url.protocol !== "http:" && url.protocol !== "https:") {
-			throw new BadRequestError("baseUrl must use http or https", "invalid_url");
+			throw new BadRequestError(
+				"baseUrl must use http or https",
+				"invalid_url",
+			);
 		}
-		if (metadata.requiresApiKey && current.requiresApiKey === false && !body.secret?.trim()) {
+		if (
+			metadata.requiresApiKey &&
+			current.requiresApiKey === false &&
+			!body.secret?.trim()
+		) {
 			throw new BadRequestError(
 				"请填写上游 API Key，或勾选上游不需要 API Key",
 				"upstream_key_required",
 			);
 		}
-		await new CredentialsDao(c.env.DB, c.env.ENCRYPTION_KEY).updateCustomChannel(id, {
+		await new CredentialsDao(
+			c.env.DB,
+			c.env.ENCRYPTION_KEY,
+		).updateCustomChannel(id, {
 			metadata,
 			secret: body.secret,
 			clearSecret: metadata.requiresApiKey === false,
-			isEnabled: body.isEnabled == null ? row.is_enabled : body.isEnabled ? 1 : 0,
+			isEnabled:
+				body.isEnabled == null ? row.is_enabled : body.isEnabled ? 1 : 0,
 			priceMultiplier: body.priceMultiplier ?? row.price_multiplier,
 			quotaSource: metadata.extractorCode ? "auto" : null,
 		});
