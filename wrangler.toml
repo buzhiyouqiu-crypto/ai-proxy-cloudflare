@@ -12,7 +12,7 @@ compatibility_flags = ["nodejs_compat"]
 [vars]
 CNY_USD_RATE = "7"
 CORS_ORIGIN = "https://keyloom.cc.cd"
-ADMIN_ONLY_MODE = "false"
+ADMIN_ONLY_MODE = "true"
 
 [placement]
 mode = "smart"
