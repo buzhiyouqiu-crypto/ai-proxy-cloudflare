@@ -1,6 +1,6 @@
 import {
-	ArrowLeftIcon,
 	AdjustmentsHorizontalIcon,
+	ArrowLeftIcon,
 	ChartBarIcon,
 	GiftIcon,
 	TableCellsIcon,

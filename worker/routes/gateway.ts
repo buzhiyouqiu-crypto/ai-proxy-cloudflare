@@ -16,6 +16,7 @@ import {
 import * as cb from "../core/circuit-breaker";
 import { ApiKeysDao } from "../core/db/api-keys-dao";
 import { CredentialsDao } from "../core/db/credentials-dao";
+import { ModelRoutingDao } from "../core/db/model-routing-dao";
 import { dispatchAll } from "../core/dispatcher";
 import { proxyImageResponse } from "../core/utils/image-proxy";
 import { interceptResponse } from "../core/utils/stream";
@@ -205,6 +206,7 @@ async function execute(
 		throw err;
 	});
 	const credDao = new CredentialsDao(c.env.DB, encryptionKey);
+	const routeDao = new ModelRoutingDao(c.env.DB);
 
 	rlog.info("gateway", "Dispatching", {
 		candidates: candidates.length,
@@ -216,8 +218,14 @@ async function execute(
 	let lastError: unknown;
 
 	for (let attempt = 0; attempt < candidates.length; attempt++) {
-		const { credential, provider, modelId, upstreamModelId, modelPrice } =
-			candidates[attempt];
+		const {
+			credential,
+			provider,
+			modelId,
+			upstreamModelId,
+			modelPrice,
+			routeRuleId,
+		} = candidates[attempt];
 		const isSub = provider.info.isSubscription ?? false;
 
 		if (
@@ -259,6 +267,25 @@ async function execute(
 				: mode === "image-edit"
 					? cloneImageEditForm(req.body as FormData, upstreamModel)
 					: { ...(req.body as Record<string, unknown>), model: upstreamModel };
+		const routeQuotaUnits =
+			mode === "image-generation" || mode === "image-edit"
+				? imageCount(upstreamBody)
+				: 1;
+		let routeQuotaClaimed = false;
+		let routeQuotaCommitted = false;
+		if (routeRuleId) {
+			routeQuotaClaimed = await routeDao.tryConsume(
+				routeRuleId,
+				routeQuotaUnits,
+			);
+			if (!routeQuotaClaimed) {
+				rlog.info("gateway", "Route quota exhausted, trying next provider", {
+					attempt,
+					modelId,
+				});
+				continue;
+			}
+		}
 		const fallbackUsage =
 			modelPrice.billingMode === "request" && modelPrice.requestPrice != null
 				? {
@@ -303,9 +330,17 @@ async function execute(
 									upstreamBody as FormData,
 								);
 
-			if (!response) continue;
+			if (!response) {
+				if (routeQuotaClaimed) {
+					await routeDao.release(routeRuleId as string, routeQuotaUnits);
+				}
+				continue;
+			}
 
 			if (!response.ok) {
+				if (routeQuotaClaimed) {
+					await routeDao.release(routeRuleId as string, routeQuotaUnits);
+				}
 				await credDao.reportFailure(credential.id, response.status, isSub);
 				cb.recordFailure(provider.info.id, modelId);
 
@@ -335,6 +370,7 @@ async function execute(
 				);
 				continue;
 			}
+			routeQuotaCommitted = true;
 
 			const responseForClient =
 				mode === "image-generation" || mode === "image-edit"
@@ -447,6 +483,9 @@ async function execute(
 				credentialId: credential.id,
 			};
 		} catch (err) {
+			if (routeQuotaClaimed && !routeQuotaCommitted) {
+				await routeDao.release(routeRuleId as string, routeQuotaUnits);
+			}
 			if (err instanceof ApiError) throw err;
 			await credDao.reportFailure(credential.id, undefined, isSub);
 			cb.recordFailure(provider.info.id, modelId);

@@ -3,6 +3,7 @@ import { z } from "zod";
 import { CandleDao } from "../../core/db/candle-dao";
 import { CatalogDao } from "../../core/db/catalog-dao";
 import { CredentialsDao } from "../../core/db/credentials-dao";
+import { ModelRoutingDao } from "../../core/db/model-routing-dao";
 import type { DbCredential } from "../../core/db/schema";
 import {
 	type CustomChannelModel,
@@ -10,6 +11,7 @@ import {
 	parseCustomChannelMetadata,
 	testCustomExtractor,
 } from "../../core/providers/custom-openai-compatible";
+import { getProvider } from "../../core/providers/registry";
 import {
 	syncAllModels,
 	syncAutoCredits,
@@ -89,6 +91,19 @@ const TestExtractorInput = z.object({
 	extractorCode: z.string().trim().min(1).max(20_000),
 });
 
+const ModelRoutingInput = z.object({
+	modelId: z.string().trim().min(1).max(200),
+	enabled: z.boolean().default(true),
+	rules: z
+		.array(
+			z.object({
+				providerKey: z.string().trim().min(1).max(300),
+				quotaLimit: z.number().int().positive().max(1_000_000_000).nullable(),
+			}),
+		)
+		.max(100),
+});
+
 function customCatalogEntries(
 	models: Array<{
 		channelId: string;
@@ -145,6 +160,79 @@ function validateCustomModelBilling(models: CustomChannelModel[]): void {
 			);
 		}
 	}
+}
+
+function catalogCustomChannelId(metadata: string | null): string | null {
+	if (!metadata) return null;
+	try {
+		const value = JSON.parse(metadata) as { channelId?: unknown };
+		return typeof value.channelId === "string" && value.channelId
+			? value.channelId
+			: null;
+	} catch {
+		return null;
+	}
+}
+
+interface RoutingProviderOption {
+	providerKey: string;
+	providerId: string;
+	name: string;
+	modelId: string;
+	credentialCount: number;
+}
+
+async function getRoutingProviders(
+	db: D1Database,
+	encryptionKey: string,
+	modelId: string,
+): Promise<RoutingProviderOption[]> {
+	const offerings = await new CatalogDao(db).findByModelId(modelId);
+	const credentials = await new CredentialsDao(db, encryptionKey).getGlobal();
+	const credentialsById = new Map(
+		credentials.map((credential) => [credential.id, credential]),
+	);
+	const options = new Map<string, RoutingProviderOption>();
+
+	for (const offering of offerings) {
+		const channelId =
+			offering.provider_id === "custom"
+				? catalogCustomChannelId(offering.metadata)
+				: null;
+		const providerKey = channelId
+			? `custom:${channelId}`
+			: offering.provider_id;
+		if (options.has(providerKey)) continue;
+
+		if (channelId) {
+			const credential = credentialsById.get(channelId);
+			if (!credential) continue;
+			const channel = parseCustomChannelMetadata(credential.metadata);
+			options.set(providerKey, {
+				providerKey,
+				providerId: "custom",
+				name: await resolveCustomChannelName(channel, channelId, encryptionKey),
+				modelId: offering.model_id,
+				credentialCount: credential.is_enabled === 1 ? 1 : 0,
+			});
+			continue;
+		}
+
+		const provider = getProvider(offering.provider_id);
+		options.set(providerKey, {
+			providerKey,
+			providerId: offering.provider_id,
+			name: provider?.info.name ?? offering.provider_id,
+			modelId: offering.model_id,
+			credentialCount: credentials.filter(
+				(credential) =>
+					credential.provider_id === offering.provider_id &&
+					credential.is_enabled === 1,
+			).length,
+		});
+	}
+
+	return [...options.values()].sort((a, b) => a.name.localeCompare(b.name));
 }
 
 async function rebuildCustomCatalog(db: D1Database): Promise<void> {
@@ -247,6 +335,125 @@ admin.get("/activity", async (c) => {
 	const hours = Math.min(Number(c.req.query("hours")) || 24, 168);
 	const data = await new AdminDao(c.env.DB).getActivity(hours);
 	return c.json({ data });
+});
+
+// ─── Model-specific provider routing ─────────────────────
+
+admin.get("/model-routing", async (c) => {
+	const routingDao = new ModelRoutingDao(c.env.DB);
+	const policies = await routingDao.listPolicies();
+	const policyByModel = new Map(
+		policies.map((policy) => [policy.model_id, policy]),
+	);
+	const rows = await new CatalogDao(c.env.DB).getAllActive();
+	const models = new Map<
+		string,
+		{
+			id: string;
+			name: string | null;
+			providerCount: number;
+			configured: boolean;
+			enabled: boolean;
+		}
+	>();
+	for (const row of rows) {
+		const current = models.get(row.model_id);
+		if (current) {
+			current.providerCount += 1;
+			continue;
+		}
+		const policy = policyByModel.get(row.model_id);
+		models.set(row.model_id, {
+			id: row.model_id,
+			name: row.name,
+			providerCount: 1,
+			configured: Boolean(policy),
+			enabled: policy?.is_enabled === 1,
+		});
+	}
+
+	const modelId = c.req.query("modelId")?.trim();
+	if (!modelId) {
+		return c.json({
+			data: {
+				models: [...models.values()].sort((a, b) =>
+					(a.name || a.id).localeCompare(b.name || b.id),
+				),
+			},
+		});
+	}
+
+	const providers = await getRoutingProviders(
+		c.env.DB,
+		c.env.ENCRYPTION_KEY,
+		modelId,
+	);
+	const modelIds = [
+		modelId.toLowerCase(),
+		...providers.map((provider) => provider.modelId.toLowerCase()),
+	].filter((id, index, ids) => ids.indexOf(id) === index);
+	const configs = await Promise.all(modelIds.map((id) => routingDao.get(id)));
+	const config = configs.find((candidate) => candidate.policy !== null) ?? {
+		policy: null,
+		rules: [],
+	};
+	return c.json({
+		data: {
+			modelId,
+			enabled: config.policy?.is_enabled === 1,
+			configured: config.policy !== null,
+			rules: config.rules,
+			providers: providers.map((provider) => ({
+				...provider,
+				rule:
+					config.rules.find(
+						(rule) => rule.provider_key === provider.providerKey,
+					) ?? null,
+			})),
+		},
+	});
+});
+
+admin.put("/model-routing", async (c) => {
+	const body = parse(
+		ModelRoutingInput,
+		await c.req.json().catch(() => {
+			throw new BadRequestError("Invalid JSON body", "invalid_json");
+		}),
+	);
+	const modelId = body.modelId.toLowerCase();
+	const providers = await getRoutingProviders(
+		c.env.DB,
+		c.env.ENCRYPTION_KEY,
+		modelId,
+	);
+	const validProviderKeys = new Set(
+		providers.map((provider) => provider.providerKey),
+	);
+	const seen = new Set<string>();
+	for (const rule of body.rules) {
+		if (!validProviderKeys.has(rule.providerKey)) {
+			throw new BadRequestError(
+				`Provider ${rule.providerKey} is not available for model ${modelId}`,
+				"routing_provider_invalid",
+			);
+		}
+		if (seen.has(rule.providerKey)) {
+			throw new BadRequestError(
+				"Each provider can appear only once in a routing policy",
+				"routing_provider_duplicate",
+			);
+		}
+		seen.add(rule.providerKey);
+	}
+
+	const config = await new ModelRoutingDao(c.env.DB).save(
+		modelId,
+		body.enabled,
+		body.rules,
+		c.get("owner_id"),
+	);
+	return c.json({ data: config });
 });
 
 // ─── Gift cards ──────────────────────────────────────────

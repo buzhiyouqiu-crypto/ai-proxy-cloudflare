@@ -17,6 +17,7 @@ import {
 	CustomChannelDisclosure,
 } from "../components/CustomChannelDisclosure";
 import { MODALITY_ICON, MODALITY_ORDER } from "../components/Modalities";
+import { ModelRoutingEditor } from "../components/ModelRoutingEditor";
 import { OrgLogo } from "../components/OrgLogo";
 import { PriceChart } from "../components/PriceChart";
 import { ProviderChip } from "../components/ProviderLogo";
@@ -33,10 +34,10 @@ import { formatContext, formatRelativeTime, formatUSD } from "../utils/format";
 import { aggregateModels } from "../utils/models";
 
 export function ModelDetail() {
-	const { org, model } = useParams<{ org: string; model: string }>();
+	const { org, model } = useParams<{ org?: string; model?: string }>();
 	const { t, i18n } = useTranslation();
 	const { isAdmin } = useAuth();
-	const modelId = `${org}/${model}`;
+	const modelId = org && model ? `${org}/${model}` : (model ?? org ?? "");
 
 	const { data: rawModels, loading } = useFetch<ModelEntry[]>("/api/models");
 	const { data: providersData } = useFetch<ProviderMeta[]>("/api/providers");
@@ -318,6 +319,8 @@ export function ModelDetail() {
 					</tbody>
 				</table>
 			</div>
+
+			{isAdmin === true && <ModelRoutingEditor modelId={group.id} />}
 
 			{/* API Integration */}
 			<CodeSamples modelId={group.id} variant={codeVariant} />

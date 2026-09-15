@@ -8,6 +8,7 @@
 import { BadRequestError, NoKeyAvailableError } from "../shared/errors";
 import { CatalogDao } from "./db/catalog-dao";
 import { CredentialsDao } from "./db/credentials-dao";
+import { ModelRoutingDao } from "./db/model-routing-dao";
 import type { DbCredential } from "./db/schema";
 import { createCustomProvider } from "./providers/custom-openai-compatible";
 import type { ProviderAdapter } from "./providers/interface";
@@ -25,6 +26,8 @@ export interface DispatchResult {
 		billingMode: "usage" | "request";
 		requestPrice: number | null;
 	};
+	routeRuleId?: string;
+	routePriority?: number;
 }
 
 function readImagePrice(metadata: string | null): number | null {
@@ -106,6 +109,20 @@ export async function dispatchAll(
 	const credDao = new CredentialsDao(db, encryptionKey);
 
 	const offerings = await catalogDao.findByModelId(modelId);
+	const routeDao = new ModelRoutingDao(db);
+	const routeModelIds = [
+		modelId.toLowerCase(),
+		...offerings.map((offering) => offering.model_id.toLowerCase()),
+	].filter((id, index, ids) => ids.indexOf(id) === index);
+	const routeConfigs = await Promise.all(
+		routeModelIds.map((id) => routeDao.get(id)),
+	);
+	const routeConfig = routeConfigs.find(
+		(config) => config.policy?.is_enabled === 1,
+	);
+	const routeRules = new Map(
+		(routeConfig?.rules ?? []).map((rule) => [rule.provider_key, rule]),
+	);
 	const candidates: DispatchResult[] = [];
 	const credentialCache = new Map<string, DbCredential[]>();
 
@@ -128,6 +145,15 @@ export async function dispatchAll(
 		if (offering.input_price < 0 || offering.output_price < 0) continue;
 		const registeredProvider = getProvider(offering.provider_id);
 		if (!registeredProvider && offering.provider_id !== "custom") continue;
+		const routeProviderKey = customChannelId
+			? `custom:${customChannelId}`
+			: offering.provider_id;
+		const routeRule = routeRules.get(routeProviderKey);
+		if (
+			routeRule?.quota_limit != null &&
+			routeRule.quota_used >= routeRule.quota_limit
+		)
+			continue;
 
 		const selectionKey = [
 			offering.provider_id,
@@ -180,6 +206,8 @@ export async function dispatchAll(
 							? null
 							: requestPrice * credential.price_multiplier,
 				},
+				routeRuleId: routeRule?.id,
+				routePriority: routeRule?.priority,
 			});
 		}
 	}
@@ -187,6 +215,11 @@ export async function dispatchAll(
 	if (candidates.length === 0) throw new NoKeyAvailableError(modelId);
 
 	candidates.sort((a, b) => {
+		if (routeConfig) {
+			const priorityA = a.routePriority ?? Number.POSITIVE_INFINITY;
+			const priorityB = b.routePriority ?? Number.POSITIVE_INFINITY;
+			if (priorityA !== priorityB) return priorityA - priorityB;
+		}
 		const effectivePrice = (candidate: DispatchResult) =>
 			candidate.modelPrice.billingMode === "request"
 				? (candidate.modelPrice.requestPrice ?? Number.POSITIVE_INFINITY)

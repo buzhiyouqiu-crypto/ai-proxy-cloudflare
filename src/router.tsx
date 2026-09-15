@@ -1,4 +1,4 @@
-import { Suspense, type ReactNode, useEffect } from "react";
+import { type ReactNode, Suspense, useEffect } from "react";
 import {
 	createBrowserRouter,
 	Navigate,
@@ -147,13 +147,15 @@ function AppLayout() {
 
 	if (isAuthRoute) return <Outlet />;
 
-	return <AdminPageGuard>
-		<>
-			<TopNav />
-			<ScrollRestoration />
-			<Outlet />
-		</>
-	</AdminPageGuard>;
+	return (
+		<AdminPageGuard>
+			<>
+				<TopNav />
+				<ScrollRestoration />
+				<Outlet />
+			</>
+		</AdminPageGuard>
+	);
 }
 
 function AdminPageGuard({ children }: { children: ReactNode }) {
@@ -213,11 +215,7 @@ function SignupRoute() {
 	const navigate = useNavigate();
 
 	useEffect(() => {
-		if (
-			isLoaded &&
-			isSignedIn &&
-			(adminOnly === false || isAdmin === true)
-		) {
+		if (isLoaded && isSignedIn && (adminOnly === false || isAdmin === true)) {
 			navigate("/dashboard", { replace: true });
 		}
 	}, [adminOnly, isAdmin, isLoaded, isSignedIn, navigate]);
@@ -315,6 +313,7 @@ export const router = createBrowserRouter([
 						path: "/providers/:providerId",
 						element: <ProviderDetail />,
 					},
+					{ path: "/:model", element: <ModelDetail /> },
 					{ path: "/:org/:model", element: <ModelDetail /> },
 				],
 			},
